@@ -1,3 +1,4 @@
+import { engineReportsCompatible, groundedEngineTags } from "@aihot/industry/engine-identity";
 // Event grouping. A report attaches to a fact, the same real-world occurrence, and
 // facts hang on a story, an occurrence with its direct developments. Recall (recall.ts): the same
 // title-and-summary embedding on both sides over the reports of the last 14 days (shared bigrams
@@ -56,6 +57,7 @@ interface ArticleRow {
   x_post: { tweetId?: string; replyTo?: string | null; quoted?: { url?: string } | null } | null;
   source_id: string;
   source_name: string;
+  source_tags: string[];
   signal_group_id: string | null;
   first_party: boolean;
   participation_mode: string;
@@ -263,7 +265,7 @@ export async function groupArticle(articleId: string, opts: GroupOptions = {}): 
 async function decide(articleId: string, opts: GroupOptions, revision: number, recheckSelection: boolean): Promise<GroupResult> {
   const [a] = await sql<ArticleRow[]>`
     SELECT a.id, a.revision, a.title, a.url, a.published_at, a.discovered_at, a.grouped_at, a.body_text, a.x_post, a.backfill,
-           s.id AS source_id, s.name AS source_name, s.signal_group_id, (s.tier = 'T1') AS first_party, s.participation_mode
+           s.id AS source_id, s.name AS source_name, s.tags AS source_tags, s.signal_group_id, (s.tier = 'T1') AS first_party, s.participation_mode
     FROM articles a JOIN sources s ON s.id = a.source_id WHERE a.id = ${articleId}`;
   if (a && a.revision !== revision) throw new GroupingSupersededError("Grouping input changed before it was read");
   if (!a) return { verdict: "skipped" };
@@ -276,8 +278,8 @@ async function decide(articleId: string, opts: GroupOptions, revision: number, r
     await markGrouped(articleId, a.revision, { addsValue: true, reason: "人工确认的归属" });
     return { verdict: "manual", factId: manual.factId };
   }
-  const [an] = await sql<{ input_revision: number; relevance: string | null; title_zh: string | null; summary_zh: string | null; output: Record<string, any> | null; composite: boolean }[]>`
-    SELECT input_revision, relevance, title_zh, summary_zh, output, ${latestCompositeCondition(sql`${articleId}`)} AS composite
+  const [an] = await sql<{ input_revision: number; relevance: string | null; title_zh: string | null; summary_zh: string | null; tags: string[]; output: Record<string, any> | null; composite: boolean }[]>`
+    SELECT input_revision, relevance, title_zh, summary_zh, tags, output, ${latestCompositeCondition(sql`${articleId}`)} AS composite
     FROM analyses WHERE article_id = ${articleId} ORDER BY input_revision DESC, id DESC LIMIT 1`;
   if (an && an.input_revision !== a.revision && a.participation_mode === "editorial") {
     throw new GroupingSupersededError("Current material revision is still waiting for analysis");
@@ -295,7 +297,7 @@ async function decide(articleId: string, opts: GroupOptions, revision: number, r
     return { verdict: "historical" };
   }
 
-  if (opts.signalOnly || a.participation_mode !== "editorial") return groupSignal(a, source, observedAt);
+  if (opts.signalOnly || a.participation_mode !== "editorial") return groupSignal(a, source, observedAt, an?.tags);
 
   // Explicitly insufficient material supplies no event identity. A missing (older) scope is separate.
   if (unsupported) {
@@ -303,7 +305,27 @@ async function decide(articleId: string, opts: GroupOptions, revision: number, r
     return { verdict: "standalone" };
   }
 
-  const kept = await currentMembership(articleId);
+  let kept = await currentMembership(articleId);
+  let identityChanged = false;
+  if (kept && recheckSelection && a.revision > 1) {
+    const [decision] = await sql<{ id: number }[]>`
+      SELECT id FROM grouping_decisions WHERE article_id = ${articleId} AND fact_id = ${kept.factId}
+      ORDER BY id DESC LIMIT 1`;
+    // Intermediate revisions may have been superseded without ever establishing membership.
+    // With no decision (imported membership), the earliest saved revision is the conservative baseline.
+    const [previous] = await sql<{ title: string; body_text: string | null }[]>`
+      SELECT title, body_text FROM article_revisions WHERE article_id = ${articleId} AND revision < ${a.revision}
+        AND (${decision?.id ?? null}::bigint IS NULL OR created_at <= (SELECT created_at FROM grouping_decisions WHERE id = ${decision?.id ?? null}))
+      ORDER BY CASE WHEN ${!!decision} THEN -revision ELSE revision END LIMIT 1`;
+    const current = { title: a.title, identityText: a.body_text, summary: an?.summary_zh, tags: an?.tags };
+    const prior = previous && { title: previous.title, identityText: previous.body_text,
+      tags: groundedEngineTags([], previous.title, previous.body_text ?? "", a.source_tags) };
+    if (!prior || !engineReportsCompatible(current, prior)) {
+      left.push(...await sql.begin(async tx => { await lockCurrentRevision(tx, articleId, a.revision); return resetAutomatic(tx, articleId); }));
+      kept = null;
+      identityChanged = true;
+    }
+  }
   // A material revision clears its value decision, but keeps its established membership. Reuse
   // that identity after judging the replacement material below; ordinary repeats and confirmed
   // nulls from before the value check keep their existing value without buying another judgement.
@@ -319,19 +341,23 @@ async function decide(articleId: string, opts: GroupOptions, revision: number, r
   }
   const title = an.title_zh || a.title;
   const query: ReportView = {
-    title, source: a.source_name, firstParty: a.first_party, at: observedAt, summary: an.summary_zh,
+    title, sourceTitle: a.title, identityText: a.body_text, tags: an.tags, source: a.source_name, firstParty: a.first_party, at: observedAt, summary: an.summary_zh,
     scope: composite ? "composite" : an.output?.scope === "single" ? "single" : "unknown",
     frame: frame ? { subject: frame.subject, action: frame.action, object: frame.object, occurredAt: frame.occurredAt } : null,
   };
   const newTitle = String(frame?.title || title).slice(0, 60);
 
-  const { sameUrl, referenced } = await relatedPosts(a);
+  let { sameUrl, referenced } = await relatedPosts(a);
+  if (sameUrl) {
+    const candidate = (await candidateViews([{ factId: sameUrl.fact_id, storyId: sameUrl.story_id, factTitle: sameUrl.fact_title, score: 1 }]))[0];
+    if (!candidate || !engineReportsCompatible(query, candidate.report)) sameUrl = null;
+  }
   // The URL settles identity, but an unseen fact still needs its first reading-value decision.
   const selectedSameUrl = sameUrl && !composite && !kept && (await candidateViews([{
     factId: sameUrl.fact_id, storyId: sameUrl.story_id, factTitle: sameUrl.fact_title, score: 1,
   }]))[0]?.selected === true;
-  const cands = selectedSameUrl ? [] : await candidateViews(await recallFacts(articleId,
-    reportText(title, an.summary_zh), RECALL_MIN_COSINE, RECALL_TOP_FACTS, [...referenced, ...(sameUrl ? [sameUrl] : [])]));
+  const cands = selectedSameUrl ? [] : (await candidateViews(await recallFacts(articleId,
+    reportText(title, an.summary_zh), RECALL_MIN_COSINE, RECALL_TOP_FACTS, [...referenced, ...(sameUrl ? [sameUrl] : [])]))).filter(c => engineReportsCompatible(query, c.report));
   const reading = selectedSameUrl ? [] : await recallSelectedBackground(articleId, reportText(title, an.summary_zh), RECALL_MIN_COSINE);
   let verdicts = new Map<number, Verdict>();
   let selection = NO_SELECTED_COVERAGE;
@@ -391,7 +417,7 @@ async function decide(articleId: string, opts: GroupOptions, revision: number, r
     storyId = sameUrl.story_id;
   } else {
     if (cands.length) {
-      for (const pick of sameOccurrence(cands, verdicts)) {
+      for (const pick of sameOccurrence(cands, verdicts, query)) {
         if (pick.score >= CONFIRM_BELOW_COSINE) {
           factId = pick.factId;
           break;
@@ -413,7 +439,7 @@ async function decide(articleId: string, opts: GroupOptions, revision: number, r
       } else if (storyId) {
         verdict = "new-fact-in-story";
       } else {
-        const dev = storyForDevelopment(cands, verdicts);
+        const dev = storyForDevelopment(cands, verdicts, query);
         if (dev) {
           verdict = "new-fact-in-story";
           storyId = dev.storyId;
@@ -472,7 +498,7 @@ async function decide(articleId: string, opts: GroupOptions, revision: number, r
       result.consolidationError = String(error).slice(0, 300);
     }
   }
-  const redirected = await redirectEmptiedStories(articleId, result.storyId!);
+  const redirected = identityChanged ? [] : await redirectEmptiedStories(articleId, result.storyId!);
   if (redirected.length) result.redirected = redirected;
   // Discussion posts that reply to or quote this post and came first now have its story, whichever
   // fact it joined (the posts waiting on an original wake when the original arrives).
@@ -552,7 +578,7 @@ async function rematchSignals(articleId: string, queryText: string): Promise<num
  * Discussion evidence (hot_signal sources): the post the item replies to or quotes decides first;
  * otherwise clear candidates are judged, and a nearly identical report attaches without a call.
  */
-async function groupSignal(a: ArticleRow, source: { id: string; signal_group_id: string | null }, observedAt: Date): Promise<GroupResult> {
+async function groupSignal(a: ArticleRow, source: { id: string; signal_group_id: string | null }, observedAt: Date, tags?: string[]): Promise<GroupResult> {
   // Discussion evidence obeys the same article lock and last-minute manual check as reports. The
   // evidence and decision commit together; a retry cannot leave half of a signal attached.
   const write = async (target: { factId: number; storyId: number } | null, verdict: "signal" | "signal-native" | "signal-unmatched", candidates: DecisionCandidate[], receiptId: number | null = null): Promise<GroupResult> => {
@@ -567,27 +593,21 @@ async function groupSignal(a: ArticleRow, source: { id: string; signal_group_id:
       return manual ? { verdict: "manual", factId: manual.factId } : { verdict, ...(target ? { storyId: target.storyId } : {}) };
     });
   };
+  const query: ReportView = { title: a.title, sourceTitle: a.title, identityText: a.body_text,
+    tags: tags ?? groundedEngineTags([], a.title, a.body_text ?? "", a.source_tags),
+    source: a.source_name, firstParty: false, at: observedAt, summary: a.body_text?.slice(0, 300) ?? null };
   const { referenced } = await relatedPosts(a);
-  if (referenced.length) {
-    const target = referenced[0]!;
-    return write({ factId: target.fact_id, storyId: target.story_id }, "signal-native", [{ id: target.fact_id, score: 1, relation: "SAME_STORY", confidence: 1 }]);
-  }
-  if (!embeddingsAvailable()) return { verdict: "signal-unmatched" };
-  const recalled = await recallFacts(a.id, signalText(a), SIGNAL_MIN_COSINE, SIGNAL_TOP_FACTS);
-  if (recalled.length === 0) {
-    // Recorded, so a post that found nothing is told apart from one never decided.
-    return write(null, "signal-unmatched", []);
-  }
-  const top = recalled[0]!;
+  const native = (await candidateViews(referenced.map(r => ({ factId: r.fact_id, storyId: r.story_id, factTitle: r.fact_title, score: 1 }))))
+    .find(c => engineReportsCompatible(query, c.report));
+  if (native) return write(native, "signal-native", [{ id: native.factId, score: 1, relation: "SAME_STORY", confidence: 1 }]);
+  if (!embeddingsAvailable()) return write(null, "signal-unmatched", []);
+  const cands = (await candidateViews(await recallFacts(a.id, signalText(a), SIGNAL_MIN_COSINE, SIGNAL_TOP_FACTS)))
+    .filter(c => engineReportsCompatible(query, c.report));
+  if (!cands.length) return write(null, "signal-unmatched", []);
   const asCandidates = (verdicts?: Map<number, Verdict>): DecisionCandidate[] =>
-    recalled.map((r) => ({ id: r.factId, score: Math.round(r.score * 1000) / 1000, relation: verdicts?.get(r.factId)?.relation, confidence: verdicts?.get(r.factId)?.confidence }));
-  if (top.score >= SIGNAL_AUTO_COSINE) {
-    return write(top, "signal", asCandidates());
-  }
-  const cands = await candidateViews(recalled);
-  if (cands.length === 0) return { verdict: "signal-unmatched" };
-  const query: ReportView = { title: a.title, source: a.source_name, firstParty: false, at: observedAt, summary: a.body_text?.slice(0, 300) ?? null };
+    cands.map(c => ({ id: c.factId, score: Math.round(c.score * 1000) / 1000, relation: verdicts?.get(c.factId)?.relation, confidence: verdicts?.get(c.factId)?.confidence }));
+  if (cands[0]!.score >= SIGNAL_AUTO_COSINE) return write(cands[0]!, "signal", asCandidates());
   const { verdicts, receiptId } = await judgeSignal(a.id, query, cands);
-  const target = signalTarget(cands, verdicts);
+  const target = signalTarget(cands, verdicts, 0.8, query);
   return write(target, target ? "signal" : "signal-unmatched", asCandidates(verdicts), receiptId);
 }

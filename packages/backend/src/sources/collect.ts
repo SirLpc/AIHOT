@@ -11,7 +11,7 @@ import { fetchRss } from "./rss.ts";
 import { fetchDetail, fetchWebList, isCallToActionTitle, needsTitle, type DetailNeed } from "./web-list.ts";
 import { unsupportedConfig } from "./config-keys.ts";
 import { admitListing } from "./filters.ts";
-import { fetchJsonList } from "./json-list.ts";
+import { readJsonList } from "./json-list.ts";
 import { fetchXSearch, planXShards, readXSearch, shardHandle, shardQuery, selfThreadHandle, SHARDABLE_SQL, tweetToCandidate, type XBacklog } from "./x.ts";
 import { FetchError, type Candidate, type SourceRow } from "./types.ts";
 
@@ -135,7 +135,13 @@ export async function collectSource(sourceId: string, opts: { force?: boolean } 
       if (rss.notModified) detail = { notModified: true, httpStatus: 304 };
     }
     else if (source.kind === "web_list") candidates = await fetchWebList(source);
-    else if (source.kind === "json_list") candidates = await fetchJsonList(source);
+    else if (source.kind === "json_list") {
+      const read = await readJsonList(source, { force: opts.force || !!detailRules && source.cursor?.detailRules !== detailRules });
+      candidates = read.candidates;
+      if (!firstImport) nextCursor.json = read.validator;
+      else delete nextCursor.json;
+      if (read.notModified) detail = { notModified: true, httpStatus: 304 };
+    }
     else {
       const x = await fetchXSearch(source);
       candidates = x.candidates;
@@ -147,6 +153,7 @@ export async function collectSource(sourceId: string, opts: { force?: boolean } 
       detail = { pages: x.pages, truncated: x.truncated, backlog: x.backlog.length, backlogPages: x.backlogPages, dropped: x.dropped };
     }
     found = candidates.length;
+    if (candidates.some(c => c.publishedAt && +c.publishedAt > Date.now())) { delete nextCursor.rss; delete nextCursor.json; }
     candidates = admitListing(candidates, source);
     if (source.config.sortByPublishedAt) candidates.sort((a, b) => (b.publishedAt?.getTime() ?? 0) - (a.publishedAt?.getTime() ?? 0));
     // Deduplicate before enrichment and limits: URL aliases must neither buy duplicate detail reads
@@ -205,7 +212,7 @@ export async function collectSource(sourceId: string, opts: { force?: boolean } 
         summary: !!d.summarySelector && !(stored?.excerpt || c.excerpt),
         body: source.participation_mode === "editorial" && stored?.body_status !== "ok" && !c.bodyText && (!c.bodyStatus || c.bodyStatus === "pending"),
       };
-      if (!need.date && !need.title && !need.summary) continue;
+      if (!need.date && !need.title && !need.summary && !(need.body && d.adapter)) continue;
       if (detailBudgetSpent || detailUsed >= detailBudget) { detailPending += 1; continue; }
       detailUsed += 1;
       try {
@@ -236,7 +243,7 @@ export async function collectSource(sourceId: string, opts: { force?: boolean } 
       detail = { ...detail, detailAttempts: detailUsed, detailFailures: detailErrors.length, detailPending, detailErrors };
       nextCursor.detailRules = detailRules;
       // A validator covers the whole listing: accept 304 only after its detail work is complete.
-      if (source.kind === "rss" && detailPending > 0) delete nextCursor.rss;
+      if (detailPending > 0) { delete nextCursor.rss; delete nextCursor.json; }
     } else delete nextCursor.detailRules;
 
     ({ created, revised } = await store(sourceId, candidates, firstImport ? "first-import" : null));

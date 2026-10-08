@@ -9,3 +9,6 @@ apps/web/.react-router
 .git
 .github
 *.log
+
+# Never send local test clusters, toolchains, or validation scratch to Docker.
+.local-runtime

@@ -1,3 +1,4 @@
+import { EngineBadge } from "../components/ui/EngineBadge";
 import { useLoaderData } from "react-router";
 import { IntentLink } from "../components/ui/IntentLink";
 import type { HotEntryView, HotResponse } from "@aihot/contracts/site";
@@ -61,11 +62,11 @@ function Voices({ e }: { e: HotEntryView }) {
 }
 
 function Badges({ e }: { e: HotEntryView }) {
-  return e.badges.map((b) => (
+  return <><EngineBadge item={{ title: e.story.title, tags: e.tags }} />{e.badges.map((b) => (
     <Badge key={b} tone={BADGES[b].tone} title={BADGES[b].hint}>
       {BADGES[b].label}
     </Badge>
-  ));
+  ))}</>;
 }
 
 /** The whole card opens the event; the title carries the link and stretches over the card. */

@@ -1,3 +1,4 @@
+import { EngineBadge } from "../../components/ui/EngineBadge";
 // One report in a feed. Desktop (≥ 961px): a white card beside the time rail. Phones: a compact row with
 // the time in the source line, the bookmark at hand, the reason in one line and duplicate reports
 // behind one button that opens a sheet. One markup, two presentations.
@@ -34,7 +35,7 @@ export const FeedItem = memo(function FeedItem({ item, group, filters, read = fa
     onOpen?.(item.id);
   };
   const showSources = !!group && (group.additionalSourceCount > 0 || group.reportCount > 1);
-  const tags = showTags ? item.tags.slice(0, 3) : [];
+  const tags = showTags ? item.tags.filter(t => !t.startsWith("engine:")).slice(0, 3) : [];
 
   return (
     <article className="relative min-w-0 lg:card lg:card-hover lg:px-[18px] lg:pb-[14px] lg:pt-[15px]" data-item-id={item.id}>
@@ -62,6 +63,8 @@ export const FeedItem = memo(function FeedItem({ item, group, filters, read = fa
           </span>
         </span>
       </header>
+
+      <div className="mt-2"><EngineBadge item={item} /></div>
 
       {isX ? (
         item.summary ? <p className={`mt-1.5 whitespace-pre-line text-[15px] leading-[1.75] line-clamp-5 lg:mt-2 lg:line-clamp-4 ${read ? "text-ink-4" : "text-ink"}`}>

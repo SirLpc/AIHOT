@@ -1,3 +1,5 @@
+import { embeddedJson, getPath } from "./json-list.ts";
+import { tuanjieReleaseBody } from "./tuanjie.ts";
 // Web list pages: HTML with selectors, Markdown through Jina Reader, and dated changelog sections.
 import * as cheerio from "cheerio";
 import { guardedFetch } from "../lib/http-fetch.ts";
@@ -372,11 +374,15 @@ export async function fetchDetail(url: string, source: SourceRow, need: DetailNe
   const jina = dateInJina || titleInJina ? (await jinaRead(url, { purpose: "source_detail", subject: `source:${source.id}` })).raw : null;
   let html: string | null = null;
   let body: ExtractedBody | null = null;
-  if ((need.date && !dateInJina) || (need.title && !titleInJina) || need.summary) {
+  if ((need.date && !dateInJina) || (need.title && !titleInJina) || need.summary || need.body && d.adapter === "tuanjie_release") {
     const res = await guardedFetch(url, { timeoutMs: 20_000 });
     if (res.status !== 200) throw new FetchError(`HTTP ${res.status} for detail`, res.status);
     html = res.text();
-    if (need.body && /html/.test(res.headers.get("content-type") ?? "")) {
+    if (need.body && d.adapter === "tuanjie_release") {
+      const data = embeddedJson(html, { ...source, config: { mode: "html_window_var", windowVar: "__props__" } });
+      body = tuanjieReleaseBody(getPath(data, "data.cms.content"), res.url);
+    }
+    if (!body && need.body && /html/.test(res.headers.get("content-type") ?? "")) {
       try { body = readable(html, res.url, offset); }
       catch { /* A failed extraction must not discard the detail metadata. */ }
     }

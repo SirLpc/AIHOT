@@ -1,3 +1,5 @@
+import { sha256, stableJson } from "../lib/ids.ts";
+import { tuanjieReleases } from "./tuanjie.ts";
 // JSON sources: plain JSON APIs, JSON embedded in HTML (script tags, window variables).
 import { credential } from "../config.ts";
 import { fetchListing } from "./listing-fetch.ts";
@@ -82,7 +84,7 @@ function findKey(obj: unknown, key: string, depth = 0): unknown {
   return undefined;
 }
 
-function embeddedJson(html: string, source: SourceRow): unknown {
+export function embeddedJson(html: string, source: SourceRow): unknown {
   const mode = source.config.mode;
   if (mode === "html_window_var") {
     const name = String(source.config.windowVar);
@@ -144,14 +146,21 @@ function embeddedJson(html: string, source: SourceRow): unknown {
   throw new FetchError(`embedded key ${key} not found`);
 }
 
-export async function fetchJsonList(source: SourceRow): Promise<Candidate[]> {
+export interface JsonValidator { configHash: string; responseUrl: string; etag: string | null; lastModified: string | null }
+export interface JsonRead { candidates: Candidate[]; validator: JsonValidator; notModified: boolean }
+export async function fetchJsonList(source: SourceRow): Promise<Candidate[]> { return (await readJsonList(source, { force: true })).candidates; }
+export async function readJsonList(source: SourceRow, opts: { force?: boolean } = {}): Promise<JsonRead> {
   const c = source.config;
   const url = String(c.url ?? "");
+  const configHash = sha256(stableJson(c));
+  const previous = !opts.force && source.cursor?.json?.configHash === configHash ? source.cursor.json as JsonValidator : null;
   const headers: Record<string, string> = { accept: "application/json, text/html;q=0.9", ...(c.headers ?? {}) };
   if (/^https:\/\/api\.github\.com\//.test(url)) {
     const token = credential("collectors", "GITHUB_TOKEN");
     if (token) headers.authorization = `Bearer ${token}`;
   }
+  if (previous?.etag) headers["if-none-match"] = previous.etag;
+  if (previous?.lastModified) headers["if-modified-since"] = previous.lastModified;
   const res = await fetchListing(url, {
     redirectPolicy: "same-origin",
     method: c.method ?? "GET",
@@ -159,6 +168,8 @@ export async function fetchJsonList(source: SourceRow): Promise<Candidate[]> {
     body: c.bodyJson ? JSON.stringify(c.bodyJson) : undefined,
     timeoutMs: 25_000,
   });
+  const validator: JsonValidator = { configHash, responseUrl: res.url, etag: res.headers.get("etag") ?? (res.status === 304 ? previous?.etag ?? null : null), lastModified: res.headers.get("last-modified") ?? (res.status === 304 ? previous?.lastModified ?? null : null) };
+  if (res.status === 304 && previous && res.url === previous.responseUrl && (previous.etag || previous.lastModified)) return { candidates: [], validator, notModified: true };
   if (res.status !== 200) throw new FetchError(`HTTP ${res.status}`, res.status);
   let data: unknown;
   if (c.mode === "html_json_key" || c.mode === "html_window_var") data = embeddedJson(res.text(), source);
@@ -173,6 +184,7 @@ export async function fetchJsonList(source: SourceRow): Promise<Candidate[]> {
   if (c.itemsObjectValues && items && typeof items === "object" && !Array.isArray(items)) items = Object.values(items);
   if (!Array.isArray(items)) throw new FetchError("items path did not resolve to an array");
 
+  if (c.adapter === "tuanjie_releases") return { candidates: tuanjieReleases(items), validator, notModified: false };
   const out: Candidate[] = [];
   for (const item of items) {
     if (c.requireBoolean && getPath(item, c.requireBoolean.path) !== c.requireBoolean.equals) continue;
@@ -188,6 +200,7 @@ export async function fetchJsonList(source: SourceRow): Promise<Candidate[]> {
       title: collapseWhitespace(stripTags(title)),
       author: firstString(item, c.authorPaths),
       publishedAt: toDate(getPath(item, c.publishedAtPath), c.publishedAtUnit, c.publishedAtUtcOffset),
+      sourceUpdatedAt: c.updatedAtPath ? toDate(getPath(item, c.updatedAtPath), c.publishedAtUnit, c.publishedAtUtcOffset) : null,
       excerpt: summary ? collapseWhitespace(stripTags(summary)).slice(0, 2000) : null,
       bodyText: summaryIsBody ? stripTags(summary!) : null,
       bodyStatus: summaryIsBody ? "ok" : "pending",
@@ -195,5 +208,5 @@ export async function fetchJsonList(source: SourceRow): Promise<Candidate[]> {
     });
   }
   if (items.length > 0 && out.length === 0 && !c.requireBoolean && !c.minNumeric) throw new FetchError("no items mapped (check title/url paths)");
-  return out;
+  return { candidates: out, validator, notModified: false };
 }

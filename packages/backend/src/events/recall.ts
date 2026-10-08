@@ -60,9 +60,9 @@ type ReadingRow = ReportView & { article_id: string; revision: number };
 /** Already displayed reports without a fact supply reading context, never identity evidence. */
 async function selectedReadingPool(): Promise<ReadingRow[]> {
   return sql<ReadingRow[]>`
-    SELECT p.article_id, p.revision, p.title, p.summary, s.name AS source, (s.tier = 'T1') AS "firstParty",
+    SELECT p.article_id, p.revision, p.title, p.summary, p.tags, a.title AS "sourceTitle", s.name AS source, (s.tier = 'T1') AS "firstParty",
       coalesce(p.published_at, p.discovered_at) AS at, an.output->>'scope' AS scope
-    FROM publications p JOIN sources s ON s.id = p.source_id LEFT JOIN analyses an ON an.id = p.analysis_id
+    FROM publications p JOIN articles a ON a.id = p.article_id JOIN sources s ON s.id = p.source_id LEFT JOIN analyses an ON an.id = p.analysis_id
     WHERE p.fact_id IS NULL AND ${selectedCondition(new Date())}
       AND p.discovered_at > now() - make_interval(days => ${RECALL_DAYS})`;
 }
@@ -203,27 +203,28 @@ export async function candidateViews(recalled: Recalled[]): Promise<CandidateVie
   if (recalled.length === 0) return [];
   const ids = recalled.map((r) => r.factId);
   type SelectedRow = RepresentativeRow & RepresentativeIdentity & {
-    fact_id: number; title: string; summary: string | null; source: string; first_party: boolean; at: Date;
+    fact_id: number; title: string; summary: string | null; tags: string[]; source_title: string; identity_text: string | null; source: string; first_party: boolean; at: Date;
   };
   const [rows, selectedRows] = await Promise.all([sql<{
     fact_id: number; story_id: number; fact_title: string; subject: string | null; action: string | null; object: string | null; occurred_at: Date | null;
-    title: string; summary: string | null; source: string; first_party: boolean; at: Date; members: number; root_fact_id: number;
+    title: string; summary: string | null; tags: string[]; source_title: string; identity_text: string | null; source: string; first_party: boolean; at: Date; members: number; root_fact_id: number;
   }[]>`
     SELECT DISTINCT ON (fa.fact_id) fa.fact_id, f.story_id, f.title AS fact_title, f.subject, f.action, f.object, f.occurred_at,
-           p.title, p.summary, s.name AS source, (s.tier = 'T1') AS first_party, coalesce(p.published_at, p.discovered_at) AS at,
+           p.title, p.summary, p.tags, a.title AS source_title, a.body_text AS identity_text, s.name AS source, (s.tier = 'T1') AS first_party, coalesce(p.published_at, p.discovered_at) AS at,
            (SELECT count(*) FROM fact_articles x WHERE x.fact_id = fa.fact_id AND x.role IN ('primary', 'report') AND NOT ${latestCompositeCondition(sql`x.article_id`)}) AS members,
            ${rootFactOf(sql`f.story_id`)} AS root_fact_id
     FROM fact_articles fa
     JOIN facts f ON f.id = fa.fact_id
     JOIN publications p ON p.article_id = fa.article_id
+    JOIN articles a ON a.id = p.article_id
     JOIN sources s ON s.id = p.source_id
     WHERE fa.fact_id = ANY(${ids}) AND fa.role IN ('primary', 'report') AND NOT ${latestCompositeCondition(sql`fa.article_id`)}
     ORDER BY fa.fact_id, (fa.role = 'primary') DESC, p.timeline_at ASC`,
     sql<SelectedRow[]>`
-      SELECT p.fact_id, p.article_id, p.title, p.summary, p.body_mode, p.score, p.timeline_at,
+      SELECT p.fact_id, p.article_id, p.title, p.summary, p.tags, a.title AS source_title, a.body_text AS identity_text, p.body_mode, p.score, p.timeline_at,
         s.name AS source, (s.tier = 'T1') AS first_party, coalesce(p.published_at, p.discovered_at) AS at,
         ${REPRESENTATIVE_COLUMNS}
-      FROM publications p JOIN sources s ON s.id = p.source_id JOIN facts f ON f.id = p.fact_id
+      FROM publications p JOIN articles a ON a.id = p.article_id JOIN sources s ON s.id = p.source_id JOIN facts f ON f.id = p.fact_id
       WHERE p.fact_id = ANY(${ids}) AND ${selectedCondition(new Date())} AND ${ownFactEvidenceCondition()}`,
   ]);
   const byFact = new Map(rows.map((r) => [Number(r.fact_id), r]));
@@ -242,9 +243,9 @@ export async function candidateViews(recalled: Recalled[]): Promise<CandidateVie
       storyRoot: Number(row.root_fact_id) === r.factId,
       score: r.score,
       selected: selected !== null,
-      selectedReport: selected ? { title: selected.title, summary: selected.summary, source: selected.source, firstParty: selected.first_party, at: selected.at } : null,
+      selectedReport: selected ? { tags: selected.tags, sourceTitle: selected.source_title, identityText: selected.identity_text, title: selected.title, summary: selected.summary, source: selected.source, firstParty: selected.first_party, at: selected.at } : null,
       report: {
-        title: row.title, source: row.source, firstParty: row.first_party, at: row.at, summary: row.summary,
+        tags: row.tags, sourceTitle: row.source_title, identityText: row.identity_text, title: row.title, source: row.source, firstParty: row.first_party, at: row.at, summary: row.summary,
         frame: { subject: row.subject, action: row.action, object: row.object, occurredAt: row.occurred_at ? beijingDate(row.occurred_at) : null },
       },
     }];

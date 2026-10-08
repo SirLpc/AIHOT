@@ -48,6 +48,7 @@ export async function resolveStory(publicId: string): Promise<StoryLookup> {
 }
 
 interface ReportRow extends RepresentativeIdentity {
+  tags: string[];
   role: string;
   body_mode: "full" | "summary";
   score: number | null;
@@ -72,7 +73,7 @@ interface ReportRow extends RepresentativeIdentity {
  */
 async function storyReports(storyId: number, now: Date): Promise<ReportRow[]> {
   return sql<ReportRow[]>`
-    SELECT DISTINCT ON (p.article_id) p.article_id AS id, p.title, p.summary, p.url, p.selected,
+    SELECT DISTINCT ON (p.article_id) p.article_id AS id, p.title, p.summary, p.tags, p.url, p.selected,
       coalesce(p.published_at, p.discovered_at) AS at, s.id AS source_id, s.name AS source_name,
       (s.tier = 'T1') AS first_party, f.id AS fact_id,
       CASE WHEN ${compositeCondition()} THEN 'mention' ELSE fa.role END AS role, p.body_mode, p.score, p.timeline_at, ${REPRESENTATIVE_COLUMNS}
@@ -164,6 +165,7 @@ export async function loadStoryDetail(storyId: number, now = new Date()): Promis
   return {
     publicId: s.public_id,
     title: s.title,
+    tags: origin?.tags ?? latestReport.tags,
     status: storyStatusFor(latestAt, now.getTime()),
     reportCount: reports.length,
     sourceCount: new Set(reports.map((r) => r.source_id)).size,
@@ -245,6 +247,8 @@ export async function loadHot(): Promise<HotResponse> {
     hotCovers(ranking),
     rankingExtras(ranking),
   ]);
+  const productRows = await sql<{ article_id: string; tags: string[] }[]>`SELECT article_id, tags FROM publications WHERE article_id = ANY(${ranking.entries.map(e => e.representativeItemId)}::text[])`;
+  const productTags = new Map(productRows.map(r => [r.article_id, r.tags]));
   return {
     computedAt: ranking.computedAt,
     windowHours: 48,
@@ -257,6 +261,7 @@ export async function loadHot(): Promise<HotResponse> {
       return {
         rank: e.rank,
         story: { publicId: e.storyPublicId, title: e.title },
+        tags: productTags.get(e.representativeItemId ?? "") ?? [],
         heat: e.heat,
         trend: e.trend,
         trendPct: e.trendPct,

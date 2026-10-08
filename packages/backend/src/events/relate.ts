@@ -1,3 +1,4 @@
+import { engineReportsCompatible } from "@aihot/industry/engine-identity";
 // The relation between a report and candidate facts: prompts, schemas, candidate
 // descriptions and the pure decision rules. group.ts does the reading and writing around them.
 //
@@ -19,6 +20,9 @@ export const RELATIONS = ["SAME_OCCURRENCE", "SAME_STORY", "UNRELATED", "ROUNDUP
 export type Relation = (typeof RELATIONS)[number];
 
 export interface ReportView {
+  sourceTitle?: string;
+  identityText?: string | null;
+  tags?: string[];
   title: string;
   source: string;
   firstParty: boolean;
@@ -95,6 +99,8 @@ export function describeReport(r: ReportView, label: string, extra = "", summary
   return [
     `【${label}】${extra}`,
     `标题：${r.title}`,
+    r.tags?.length ? `产品与主题标签：${r.tags.join("、")}` : null,
+    r.sourceTitle ? `原始标题：${r.sourceTitle}` : null,
     `来源：${r.source}${r.firstParty ? "（当事方/官方）" : ""}｜发布时间：${when(r.at)}`,
     `摘要：${(r.summary ?? "").slice(0, summaryLimit) || "（无）"}`,
     r.scope && r.scope !== "unknown" ? `资料范围：${r.scope === "composite" ? "多个独立发生的综合稿" : "单一具体发生或议题"}` : null,
@@ -148,23 +154,23 @@ export function verdictsByFact(decisions: Array<{ id: string; relation: Relation
 }
 
 /** Candidates the model calls the same occurrence, most confident first (recall similarity breaks ties). */
-export function sameOccurrence(cands: CandidateView[], verdicts: Map<number, Verdict>): CandidateView[] {
+export function sameOccurrence(cands: CandidateView[], verdicts: Map<number, Verdict>, query?: ReportView): CandidateView[] {
   return cands
-    .filter((c) => verdicts.get(c.factId)?.relation === "SAME_OCCURRENCE")
+    .filter((c) => (!query || engineReportsCompatible(query, c.report)) && verdicts.get(c.factId)?.relation === "SAME_OCCURRENCE")
     .sort((a, b) => (verdicts.get(b.factId)!.confidence - verdicts.get(a.factId)!.confidence) || (b.score - a.score));
 }
 
 /** The story a development joins: the most similar candidate that is its story's root occurrence. */
-export function storyForDevelopment(cands: CandidateView[], verdicts: Map<number, Verdict>): CandidateView | null {
-  return cands.filter((c) => c.storyRoot && verdicts.get(c.factId)?.relation === "SAME_STORY").sort((a, b) => b.score - a.score)[0] ?? null;
+export function storyForDevelopment(cands: CandidateView[], verdicts: Map<number, Verdict>, query?: ReportView): CandidateView | null {
+  return cands.filter((c) => (!query || engineReportsCompatible(query, c.report)) && c.storyRoot && verdicts.get(c.factId)?.relation === "SAME_STORY").sort((a, b) => b.score - a.score)[0] ?? null;
 }
 
 /** A discussion post counts for a fact it reports, or one it clearly reacts to. */
-export function signalTarget(cands: CandidateView[], verdicts: Map<number, Verdict>, minReactionConfidence = 0.8): CandidateView | null {
+export function signalTarget(cands: CandidateView[], verdicts: Map<number, Verdict>, minReactionConfidence = 0.8, query?: ReportView): CandidateView | null {
   return (
-    sameOccurrence(cands, verdicts)[0] ??
+    sameOccurrence(cands, verdicts, query)[0] ??
     cands
-      .filter((c) => verdicts.get(c.factId)?.relation === "SAME_STORY" && verdicts.get(c.factId)!.confidence >= minReactionConfidence)
+      .filter((c) => (!query || engineReportsCompatible(query, c.report)) && verdicts.get(c.factId)?.relation === "SAME_STORY" && verdicts.get(c.factId)!.confidence >= minReactionConfidence)
       .sort((a, b) => b.score - a.score)[0] ??
     null
   );

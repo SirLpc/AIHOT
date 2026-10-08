@@ -1,3 +1,4 @@
+import { engineReportsCompatible } from "@aihot/industry/engine-identity";
 // Story consolidation (group.ts calls it after a decision). Stories a report is firmly tied to may be
 // one story that grew two roots: their roots are compared directly and merge only when both models
 // see one story. Stories that stay apart though reports keep tying them list each other as related
@@ -27,9 +28,9 @@ interface StoryRoot {
 async function storyRoot(storyId: number): Promise<StoryRoot | null> {
   const [row] = await sql<{
     subject: string | null; action: string | null; object: string | null; occurred_at: Date | null;
-    title: string; summary: string | null; source: string; first_party: boolean; at: Date; started_at: Date; roundup: boolean;
+    title: string; summary: string | null; tags: string[]; source_title: string; identity_text: string | null; source: string; first_party: boolean; at: Date; started_at: Date; roundup: boolean;
   }[]>`
-    SELECT f.subject, f.action, f.object, f.occurred_at, p.title, p.summary, s.name AS source, (s.tier = 'T1') AS first_party,
+    SELECT f.subject, f.action, f.object, f.occurred_at, p.title, p.summary, p.tags, a.title AS source_title, a.body_text AS identity_text, s.name AS source, (s.tier = 'T1') AS first_party,
            coalesce(p.published_at, p.discovered_at) AS at,
            (SELECT min(coalesce(q.published_at, q.discovered_at)) FROM fact_articles z JOIN publications q ON q.article_id = z.article_id
             WHERE z.fact_id = f.id AND z.role IN ('primary', 'report') AND NOT ${latestCompositeCondition(sql`z.article_id`)}) AS started_at,
@@ -38,6 +39,7 @@ async function storyRoot(storyId: number): Promise<StoryRoot | null> {
     JOIN stories st ON st.id = f.story_id AND st.origin <> 'manual'
     JOIN fact_articles fa ON fa.fact_id = f.id AND fa.role IN ('primary', 'report') AND NOT ${latestCompositeCondition(sql`fa.article_id`)}
     JOIN publications p ON p.article_id = fa.article_id
+    JOIN articles a ON a.id = p.article_id
     JOIN sources s ON s.id = p.source_id
     WHERE f.id = ${rootFactOf(storyId)}
     ORDER BY (fa.role = 'primary') DESC, p.timeline_at ASC
@@ -46,7 +48,7 @@ async function storyRoot(storyId: number): Promise<StoryRoot | null> {
   return {
     storyId, at: row.started_at, roundup: row.roundup,
     report: {
-      title: row.title, source: row.source, firstParty: row.first_party, at: row.at, summary: row.summary,
+      tags: row.tags, sourceTitle: row.source_title, identityText: row.identity_text, title: row.title, source: row.source, firstParty: row.first_party, at: row.at, summary: row.summary,
       frame: { subject: row.subject, action: row.action, object: row.object, occurredAt: row.occurred_at ? beijingDate(row.occurred_at) : null },
     },
   };
@@ -103,6 +105,10 @@ export async function consolidate(storyIds: number[]): Promise<Consolidation[]> 
   const out: Consolidation[] = [];
   for (const other of others) {
     const base = { from: other.storyId, into: anchor.storyId, fromTitle: other.report.title, intoTitle: anchor.report.title };
+    if (!engineReportsCompatible(anchor.report, other.report)) {
+      out.push({ ...base, merge: false, first: "UNRELATED", second: null, difference: "产品或完整版本身份冲突，禁止自动合并" });
+      continue;
+    }
     const first = await judgeStories("group", anchor, other);
     await completeReceipt(sql, first.receiptId);
     if (!firmlyTied(first.relation, first.confidence)) {

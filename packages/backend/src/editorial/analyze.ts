@@ -1,3 +1,4 @@
+import { groundedEngineTags } from "@aihot/industry/engine-identity";
 // analyzeArticle: the judging and writing steps, each with its own prompt from the industry pack
 // (industry/prompts/):
 //   1. prefilter: does the material belong to this industry at all (wide recall). Only BLOCK stops an
@@ -182,7 +183,7 @@ export function normalizeStructure(data: z.infer<typeof StructureSchema>, a: Ana
     }).slice(0, 4),
   };
   return {
-    category: data.category, tags: normalizeTags(data.tags),
+    category: data.category, tags: groundedEngineTags(normalizeTags(data.tags), a.title, a.bodyText ?? a.excerpt ?? "", a.source.tags),
     subjects: [...new Set(data.subjects.map((s) => s.trim().toLowerCase()).filter((s) => s in ENTITIES))],
     scope, fact,
   };

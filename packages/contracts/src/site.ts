@@ -177,6 +177,8 @@ export interface HotParticipant {
 
 
 export interface HotEntryView {
+  /** Product evidence, independent of publisher. */
+  tags?: string[];
   rank: number;
   story: StoryRef;
   heat: number;
@@ -227,6 +229,8 @@ export interface StoryFactView {
 }
 
 export interface StoryDetail {
+  /** Product evidence, independent of publisher. */
+  tags?: string[];
   publicId: string;
   title: string;
   status: "active" | "watching" | "settled";
@@ -264,6 +268,8 @@ export interface StoryDetail {
 export type ReportKind = "daily" | "weekly" | "monthly";
 
 export interface ReportCitation {
+  /** Product evidence, independent of publisher. */
+  tags?: string[];
   itemId: string | null;
   title: string;
   summary: string | null;

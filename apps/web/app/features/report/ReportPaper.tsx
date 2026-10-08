@@ -1,3 +1,4 @@
+import { EngineBadge } from "../../components/ui/EngineBadge";
 // One report with a newspaper's structure in the site's own look: a nameplate with its 报眼 (the box
 // beside it for the issue and date), a band of the issue's figures, the front page (the lead, today's
 // highlights and the page index), then one page per section in two columns, the neighbouring issues
@@ -123,6 +124,7 @@ function Related({ items, className = "" }: { items: ReportCitation[]; className
             ) : (
               <span title={WITHDRAWN_NOTE} className="text-ink-4 line-through">{r.title}</span>
             )}
+            {r.available && <EngineBadge item={r} />}
             {r.available && <span className="ml-2 text-[12px] text-ink-4">{r.sourceName}</span>}
           </span>
         </li>
@@ -150,6 +152,7 @@ function Story({ c, dated, className = "" }: { c: ReportCitation; dated: boolean
         {c.available && <Coverage c={c} />}
         {dated && c.publishedAt && <span className="num ml-auto shrink-0 text-ink-4">{shortDay(c.publishedAt)}</span>}
       </div>
+      {c.available && <div className="mt-2"><EngineBadge item={c} /></div>}
       {c.available ? (
         <>
           <h3 className="mt-3 text-[19px] font-bold leading-[1.5] tracking-[-0.01em] text-ink [overflow-wrap:anywhere] [text-wrap:pretty] @[880px]:text-[20px]">
@@ -289,6 +292,7 @@ function FrontPage({ report, pages, leadStory, count }: { report: ReportDetail; 
       {/* On a phone the headline comes before a landscape picture, so the first screen carries the news. */}
       <div id={leadStory ? (anchorOf(leadStory) ?? undefined) : undefined} className="flex min-w-0 scroll-mt-[calc(var(--bar-h)+1.5rem)] flex-col py-7 @[880px]:border-r @[880px]:border-line @[880px]:py-10 @[880px]:pr-10">
         <Kicker>{byEvent ? "头条" : "本期导读"}</Kicker>
+        {leadStory && <div className="order-1 mt-2"><EngineBadge item={leadStory} /></div>}
         {cover && wide && <LeadPicture cover={cover} onError={() => setBroken(cover.url)} priority className="order-2 mt-5 @[560px]:order-1" />}
         <h2 className="order-1 mt-4 text-[32px] font-black leading-[1.28] tracking-[-0.03em] text-ink [text-wrap:balance] @[520px]:text-[40px] @[560px]:order-2 @[1040px]:text-[48px] @[1040px]:leading-[1.22]">
           {leadStory?.itemId ? (
@@ -339,6 +343,7 @@ function FrontPage({ report, pages, leadStory, count }: { report: ReportDetail; 
                     <Link to={to} viewTransition={to.startsWith("/")} className="group flex gap-3.5 border-b border-line py-4">
                       <span className="num w-6 shrink-0 text-[26px] font-black leading-[0.95] tracking-[-0.03em] text-accent">{i + 1}</span>
                       <span className="min-w-0">
+                        <EngineBadge item={h} />
                         <span className="block text-[15px] font-bold leading-[1.55] text-ink transition-colors group-hover:text-accent">{h.title}</span>
                         <span className="mt-1.5 block truncate text-[12px] text-ink-4">{h.sourceName}</span>
                       </span>
@@ -516,6 +521,7 @@ export function ReportPaper({ report, index }: { report: ReportDetail; index: Re
                   ) : (
                     <span className="text-ink">{f.title}</span>
                   )}
+                  {f.available && <EngineBadge item={f} />}
                   {f.available && <span className="ml-2 text-[12px] text-ink-4">{f.sourceName}</span>}
                   {f.available && f.followUp && <Badge className="ml-2 align-[1px]" title={`${monthDay(f.followUp)}的日报报道过这件事，这里是新进展`}>跟进</Badge>}
                 </span>
