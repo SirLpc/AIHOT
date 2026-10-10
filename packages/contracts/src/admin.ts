@@ -256,6 +256,8 @@ export interface AdminDeliveryIssue {
 
 export interface AdminRuns {
   checkedAt: Timestamp;
+  /** Availability of the pg-boss tables used by this view; not a worker heartbeat. */
+  queueStatus: "ready" | "uninitialized" | "incomplete";
   processes: Array<{ role: string; pid: number; host: string; release: string; startedAt: Timestamp; at: Timestamp; alive: boolean }>;
   jobs: Array<{ job: string; started_at: Timestamp; finished_at: Timestamp | null; status: string; error: string | null; failed_24h: number; runs_24h: number }>;
   timeline: Array<{ id: number; job: string; started_at: Timestamp; finished_at: Timestamp | null; status: string; error: string | null }>;
@@ -264,7 +266,7 @@ export interface AdminRuns {
   grouping: {
     waiting: number;
     needsAttention: number;
-    items: Array<{ articleId: string; title: string; since: Timestamp; failed: boolean; recovery: "automatic" | "receipt" | "manual"; receiptId: number | null; error: string | null }>;
+    items: Array<{ articleId: string; title: string; since: Timestamp; failed: boolean; recovery: "automatic" | "receipt" | "manual" | "unavailable"; receiptId: number | null; error: string | null }>;
   };
   lagging: Array<{
     id: string; name: string; kind: string; health: string; fail_count: number; last_ok_at: Timestamp | null; last_fetch_at: Timestamp | null;

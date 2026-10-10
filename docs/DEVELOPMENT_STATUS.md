@@ -1,6 +1,17 @@
 # UnityHot 开发状态
 
-更新：2026-10-08。独立本地目录 UnityHot，分支 feat/unityhot-local；起点/已核验 GitHub main 为 07d4c775e71a2f1ec3205a0082a21b423cb09b6e。用户已单次授权发布到 SirLpc/AIHOT 的 unityhot 分支；发布结果以 GitHub 实际引用为准。未建 PR、未改远程仓库名、未部署。TestPg 未触碰。
+更新：2026-10-10。独立本地目录 UnityHot，当前分支 unityhot；适配起点/GitHub main 为 07d4c775e71a2f1ec3205a0082a21b423cb09b6e。首次适配已发布为 d8ddfdbbf05891048e64db32506be0f06708a64b。本次运行页修复在本地验证，新增发布仍需单独授权；以 GitHub 实际引用为准。未建 PR、未改远程仓库名、未部署。TestPg 未触碰。
+
+## 2026-10-10：首次预览运行页
+
+- 已确认根因：Compose 的 setup 只跑业务迁移和 seed；API/Web 没有初始化 pg-boss，旧运行页却直接读取 `pgboss.job`、`pgboss.schedule`，首次访问因表不存在失败。已有测试先调用 getBoss，遗漏了这个启动路径。
+- 修复在读取前检查 schema 和所需表，返回 ready / uninitialized / incomplete；所有依赖这些表的查询共享同一次检查。GET 不调用 getBoss，不建表，不改变开关，也不启动 worker。
+- 保留普通业务统计、外部模块任务与时间线。等待去重文章仍显示，队列不可用时不声称自动处理中；时间来自候选与修订记录。UI 区分不可用与空队列，禁用依赖队列的重新处理/回执放行，已初始化时保留原有行为。
+- 缺少单表、只有 schema、正常队列及真实数据库错误分别验证；数据库错误继续向上报错，没有 blanket catch 或伪成功。没有新增数据库迁移、SSRF 变更或产品归组规则变更。
+
+本次检查：先复现 fresh API 的 500（Web 映射为 503）和 UI 缺失状态，再实现修复。`npm run typecheck`、`npm test`（700/700，含新增 7 个检查，独立 PostgreSQL 17.11）、`npm run test:standalone`（176/176）、Web 生产构建通过。新增运行页 SSR 测试 3/3 通过；完整 Web 测试 37 通过、14 因浏览器环境阻塞而失败，不能称整套通过。默认 Playwright 浏览器缺失，系统 Chromium 替代启动仍报 `socket() failed: Operation not permitted`。Docker 构建、真实浏览器交互和视觉检查未验收；本次没有重启预览服务跑 smoke/MCP，不能复用下方旧记录作本次结果。
+
+独立静态审查无关键或重要问题；审查发现测试在导入 config 后设置环境变量不会同步缓存的模型开关，已在新测试中明确设为 false。测试仅使用新建独立 PostgreSQL 集群和本地假服务，不复用已停用的预览数据库，不启动应用 worker；验证后停止测试数据库。原隔离运行时与数据保持原样。
 
 ## 已实现
 
@@ -14,7 +25,7 @@
 - Feed、详情、热点、事件、报告普通条目/头条/看点/相关条目/快讯有固定产品标记，独立于手机端可隐藏的普通标签
 - 摘要与原文链接默认发布；site_fulltext、syndicate_fulltext 全部关闭。外部采集、付费模型、飞书、IndexNow 默认关闭
 
-## 验证
+## 2026-10-08 首次适配验证（历史记录）
 
 标准检查与结果：
 
@@ -63,11 +74,6 @@ PostgreSQL 原先不可用；便携包缺少迁移所需 LZ4，未修改迁移�
 
 执行选择：使用用户要求的新独立 checkout 作为隔离边界，没有再创建嵌套 worktree；保留 @aihot/* 内部工作区包名，避免无意义导入重命名。它们不作为站点公开品牌。
 
-### 当前云目录可重复执行
+### 验证环境说明
 
-已安装工具链与仅本机的验证脚本保存在被忽略的 .local-runtime/；这些不是生产配置，也不会发布到远程：
-
-- bash .local-runtime/run-native-tests.sh npm test
-- bash .local-runtime/run-native-tests.sh bash .local-runtime/smoke.sh
-
-正常有 PostgreSQL 17 的环境仍用 README 中的标准命令。发布目标为远程 unityhot 分支，origin/main 不在本次修改范围。README 和 UNITYHOT_SETUP 已包含不依赖此目录的完整正常启动流程。
+上方 2026-10-08 的记录为首次适配验证，不能替代新改动的复测。此前云端预览运行时已停用并隔离保存；不要依赖曾经使用的本机脚本或数据库路径。正常 PostgreSQL 17 环境使用 README 中的标准命令；本次修复另用一次性测试集群，验证后停止。发布目标为远程 unityhot 分支，origin/main 不在修改范围。README 和 UNITYHOT_SETUP 包含不依赖云端运行时的启动流程。

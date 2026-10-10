@@ -43,17 +43,25 @@ export default function RunsAdmin({ loaderData }: Route.ComponentProps) {
   const queued = r.queues.filter((q) => q.state !== "active").reduce((a, q) => a + q.n, 0);
   const worker = r.processes.find((p) => p.role === "worker");
   const failing = r.jobs.filter((j) => j.status === "failed");
+  const queueReady = r.queueStatus === "ready";
+  const queueUnavailable = r.queueStatus === "uninitialized" ? "队列尚未初始化" : "队列初始化不完整";
 
   return (
     <AdminPage title="运行" subtitle={<>任务、队列、信源延迟与需要人工核对的回执和投递。每 20 秒自动刷新 · 最近检查 {bj(r.checkedAt)}</>}>
+      {!queueReady && (
+        <Card className="mb-5" title={queueUnavailable}>
+          <p className="text-[13px] text-ink-3">仅启动 API 和 Web 的首次预览不会初始化任务队列。此页只读，不会启动 worker、采集或模型调用。队列积压、失败队列任务及 worker 定时任务状态暂不可用；其他统计仍可查看。</p>
+          <p className="mt-2 text-[13px] text-ink-3">{r.queueStatus === "incomplete" ? "检测到部分队列表缺失，请检查初始化或升级日志；不要删除数据卷或为排除此提示打开外部调用开关。" : "本地预览可保持此状态，无需为查看页面启动 worker。"}</p>
+        </Card>
+      )}
       <div className="mb-5 grid grid-cols-2 gap-3 lg:grid-cols-5">
         <Stat
           label="worker"
           value={<span className="inline-flex items-center gap-2 text-[18px]"><Dot tone={worker?.alive ? "ok" : "bad"} />{worker ? (worker.alive ? "运行中" : "心跳中断") : "无心跳"}</span>}
           hint={worker ? `${worker.host} · 心跳 ${ago(worker.at)}` : "worker 未上报心跳"}
         />
-        <Stat label="队列积压" value={num(queued)} tone={queued > 500 ? "warn" : undefined} hint="排队与等待重试" />
-        <Stat label="失败的定时任务" value={num(failing.length)} tone={failing.length ? "bad" : "ok"} hint="最近一次运行失败" />
+        <Stat label="队列积压" value={queueReady ? num(queued) : "—"} tone={queueReady && queued > 500 ? "warn" : undefined} hint={queueReady ? "排队与等待重试" : queueUnavailable} />
+        <Stat label="失败的定时任务" value={queueReady ? num(failing.length) : "—"} tone={queueReady ? (failing.length ? "bad" : "ok") : undefined} hint={queueReady ? "最近一次运行失败" : "worker 定时任务状态不可用"} />
         <Stat label="回执结果未知" value={num(r.receipts.issues.filter((x) => x.status === "unknown").length)} tone={r.receipts.issues.some((x) => x.status === "unknown") ? "bad" : "ok"} hint={`7 天 ${num(Object.values(r.receipts.counts).reduce((a, b) => a + b, 0))} 次付费请求`} />
         <Stat label="投递待核实" value={num(r.deliveries.filter((d) => d.status === "unknown").length)} tone={r.deliveries.some((d) => d.status === "unknown") ? "bad" : "ok"} />
       </div>
@@ -61,10 +69,11 @@ export default function RunsAdmin({ loaderData }: Route.ComponentProps) {
       {r.grouping.waiting > 0 && (
         <Card className="mb-5" title="等待去重确认的精选" right={<span>{num(r.grouping.waiting)} 条等待 · {num(r.grouping.needsAttention)} 条超过 10 分钟</span>} pad={false}>
           <p className="px-4 py-3 text-[13px] text-ink-3">这些新闻已达到精选条件，确认是否重复后才会进入精选。最多展示等待最久的 30 条。</p>
+          {!queueReady && <p className="px-4 pb-3 text-[13px] text-ink-3">等待时间根据候选与修订记录估算；队列不可用，无法确认排队情况或人工重新归组时间。</p>}
           <DataTable dense rows={r.grouping.items} rowKey={(item) => item.articleId} columns={[
             { key: "title", label: "新闻", render: (item) => <Link className="text-accent" to={`/admin/content/${item.articleId}`}>{item.title}</Link> },
             { key: "since", label: "开始等待", render: (item) => <Time at={item.since} /> },
-            { key: "recovery", label: "下一步", render: (item) => <Badge tone={item.recovery === "manual" ? "bad" : "warn"}>{item.recovery === "manual" ? "需处理后恢复" : item.recovery === "receipt" ? "等待付费结果自动恢复" : "自动处理中"}</Badge> },
+            { key: "recovery", label: "下一步", render: (item) => <Badge tone={item.recovery === "manual" ? "bad" : "warn"}>{item.recovery === "unavailable" ? "队列不可用，等待确认" : item.recovery === "manual" ? "需处理后恢复" : item.recovery === "receipt" ? "等待付费结果自动恢复" : "自动处理中"}</Badge> },
             { key: "error", label: "原因", render: (item) => <span className="line-clamp-2 text-[12px] text-ink-3">{item.receiptId ? `回执 #${item.receiptId} · ` : ""}{item.error ?? "等待身份确认"}</span> },
           ]} />
         </Card>
@@ -76,7 +85,7 @@ export default function RunsAdmin({ loaderData }: Route.ComponentProps) {
             dense
             rows={[...backlog.entries()]}
             rowKey={([name]) => name}
-            empty="队列是空的"
+            empty={queueReady ? "队列是空的" : queueUnavailable}
             columns={[
               { key: "n", label: "队列", render: ([name]) => <span className="font-mono text-[12.5px]">{name}</span> },
               ...(["created", "retry", "active"] as const).map((st) => ({
@@ -90,6 +99,7 @@ export default function RunsAdmin({ loaderData }: Route.ComponentProps) {
           />
         </Card>
         <Card title="定时任务" pad={false}>
+          {!queueReady && <p className="px-4 py-3 text-[13px] text-ink-3">worker 定时任务状态不可用；这里只显示模块登记的外部任务，历史记录仍保留在时间线中。</p>}
           <DataTable
             dense
             rows={r.jobs}
@@ -134,7 +144,7 @@ export default function RunsAdmin({ loaderData }: Route.ComponentProps) {
               { key: "w", label: "服务", render: (x) => <span className="whitespace-nowrap">{x.service}{x.model ? ` · ${x.model}` : ""}</span> },
               { key: "p", label: "用途", render: (x) => (x.subject && /^[\w-]{10,}$/.test(x.subject) && x.purpose.includes("analy") ? <Link className="text-accent" to={`/admin/content/${x.subject}`}>{x.purpose}</Link> : x.purpose) },
               { key: "e", label: "错误", render: (x) => <span className="line-clamp-2 text-[12px] text-ink-3" title={x.error ?? ""}>{x.error}</span> },
-              { key: "a", label: "", render: (x) => (x.status === "unknown" ? <Button size="sm" onClick={() => setReceipt(x)}>核对</Button> : null) },
+              { key: "a", label: "", render: (x) => (x.status === "unknown" ? <Button size="sm" disabled={!queueReady} onClick={() => setReceipt(x)}>核对</Button> : null) },
             ]}
           />
         </Card>
@@ -176,7 +186,7 @@ export default function RunsAdmin({ loaderData }: Route.ComponentProps) {
           right={
             <span className="flex items-center gap-3">
               {r.retrying.count > 0 && <span>等待重试 {num(r.retrying.count)} 条 · 下一次 <Time at={r.retrying.next} /></span>}
-              {r.errors.length > 0 && <Button size="sm" onClick={() => setRequeue("")}>全部重新处理</Button>}
+              {r.errors.length > 0 && <Button size="sm" disabled={!queueReady} onClick={() => setRequeue("")}>全部重新处理</Button>}
             </span>
           }
           pad={false}
@@ -191,7 +201,7 @@ export default function RunsAdmin({ loaderData }: Route.ComponentProps) {
               { key: "n", label: "条数", align: "right", render: (e) => num(e.n) },
               { key: "x", label: "示例", render: (e) => <Link className="text-accent" to={`/admin/content/${e.example}`}>查看</Link> },
               { key: "l", label: "最近", render: (e) => <Time at={e.last} /> },
-              { key: "a", label: "", align: "right", render: (e) => <Button size="sm" onClick={() => setRequeue(e.error)}>重新处理</Button> },
+              { key: "a", label: "", align: "right", render: (e) => <Button size="sm" disabled={!queueReady} onClick={() => setRequeue(e.error)}>重新处理</Button> },
             ]}
           />
         </Card>
@@ -256,7 +266,7 @@ export default function RunsAdmin({ loaderData }: Route.ComponentProps) {
         confirmLabel="记录并放行"
         busy={pending === "release"}
         onClose={() => setReceipt(null)}
-        onSubmit={async (note) => (await run("POST", `/api/admin/receipts/${receipt!.id}/release`, { billed: billed === "true", note }, { label: "release", success: "已放行" })) !== null}
+        onSubmit={async (note) => queueReady && (await run("POST", `/api/admin/receipts/${receipt!.id}/release`, { billed: billed === "true", note }, { label: "release", success: "已放行" })) !== null}
       >
         <Field label="供应商是否计费">
           <Select value={billed} onChange={(e) => setBilled(e.target.value)}>
@@ -272,7 +282,7 @@ export default function RunsAdmin({ loaderData }: Route.ComponentProps) {
         confirmLabel="重新处理"
         busy={pending === "requeue"}
         onClose={() => setRequeue(null)}
-        onSubmit={async (reason) => (await run("POST", "/api/admin/processing/requeue", { group: requeue || null, reason }, { label: "requeue", success: "已重新排队" })) !== null}
+        onSubmit={async (reason) => queueReady && (await run("POST", "/api/admin/processing/requeue", { group: requeue || null, reason }, { label: "requeue", success: "已重新排队" })) !== null}
       />
       <ReasonDialog
         open={!!delivery}

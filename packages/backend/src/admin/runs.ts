@@ -14,6 +14,13 @@ const STALE_HEARTBEAT_MS = 3 * 60_000;
 type Runs = BeforeJson<AdminRuns>;
 
 export async function runsOverview(): Promise<Runs> {
+  // API/web-only previews have business tables but no pg-boss schema. GET must stay read-only;
+  // check once for every dependent query, without hiding permission or other database errors.
+  const [tables] = await sql<{ schema: boolean; jobs: boolean; schedules: boolean }[]>`
+    SELECT to_regnamespace('pgboss') IS NOT NULL AS schema,
+           to_regclass('pgboss.job') IS NOT NULL AS jobs, to_regclass('pgboss.schedule') IS NOT NULL AS schedules`;
+  const queueReady = tables!.jobs && tables!.schedules;
+  const queueStatus = queueReady ? "ready" : tables!.schema ? "incomplete" : "uninitialized";
   const currentJobs = (await Promise.all(serverModules().flatMap((m) => m.admin?.currentJobs ? [m.admin.currentJobs()] : []))).flat();
   const [
     heartbeats,
@@ -35,7 +42,7 @@ export async function runsOverview(): Promise<Runs> {
         SELECT DISTINCT ON (job) job, started_at, finished_at, status, left(error, 400) AS error
         FROM job_runs
         -- Registered worker schedules and the modules' current external jobs; the timeline retains history.
-        WHERE EXISTS (SELECT 1 FROM pgboss.schedule s WHERE s.name = 'cron.' || job_runs.job)
+        WHERE ${queueReady ? sql`EXISTS (SELECT 1 FROM pgboss.schedule s WHERE s.name = 'cron.' || job_runs.job)` : sql`false`}
           OR job_runs.job = ANY(${currentJobs}::text[])
         ORDER BY job, started_at DESC, id DESC
       ), counts AS (
@@ -45,12 +52,12 @@ export async function runsOverview(): Promise<Runs> {
       SELECT latest.*, coalesce(counts.failed_24h, 0) AS failed_24h, coalesce(counts.runs_24h, 0) AS runs_24h
       FROM latest LEFT JOIN counts USING (job) ORDER BY job`,
     sql<Runs["timeline"]>`SELECT id, job, started_at, finished_at, status, left(error, 300) AS error FROM job_runs ORDER BY started_at DESC, id DESC LIMIT 80`,
-    sql<Runs["queues"]>`
+    queueReady ? sql<Runs["queues"]>`
       SELECT name, state, count(*)::int AS n, min(created_on) AS oldest FROM pgboss.job
-      WHERE state IN ('created', 'retry', 'active') GROUP BY 1, 2 ORDER BY 1, 2`,
-    sql<Runs["failedJobs"]>`
+      WHERE state IN ('created', 'retry', 'active') GROUP BY 1, 2 ORDER BY 1, 2` : [],
+    queueReady ? sql<Runs["failedJobs"]>`
       SELECT name, count(*)::int AS failed, max(completed_on) AS last, left((array_agg(output::text ORDER BY completed_on DESC))[1], 300) AS last_output
-      FROM pgboss.job WHERE state = 'failed' AND completed_on > now() - interval '24 hours' GROUP BY 1 ORDER BY 2 DESC, 1`,
+      FROM pgboss.job WHERE state = 'failed' AND completed_on > now() - interval '24 hours' GROUP BY 1 ORDER BY 2 DESC, 1` : [],
     sql<Runs["lagging"]>`
       SELECT id, name, kind, health, fail_count, last_ok_at, last_fetch_at, next_fetch_at, interval_minutes, left(last_error, 200) AS last_error
       FROM sources
@@ -71,7 +78,7 @@ export async function runsOverview(): Promise<Runs> {
              (array_agg(id ORDER BY discovered_at DESC))[1] AS example
       FROM articles WHERE processing_state = 'failed' AND discovered_at > now() - interval '30 days' GROUP BY 1 ORDER BY 2 DESC, 1 LIMIT 20`,
     sql<Runs["ingest"]>`SELECT client, kind, status, left(error, 200) AS error, summary, created_at FROM ingest_events ORDER BY created_at DESC, id DESC LIMIT 20`,
-    waitingSelectedNews(),
+    waitingSelectedNews(queueReady),
   ]);
   // Articles waiting to retry after a passing provider problem (they are not failed).
   const [retrying] = await sql<{ n: number; next: Date | null }[]>`
@@ -79,6 +86,7 @@ export async function runsOverview(): Promise<Runs> {
   const now = Date.now();
   return {
     checkedAt: new Date(now).toISOString(),
+    queueStatus,
     processes: heartbeats.map((h) => ({
       role: h.key.slice("heartbeat.".length),
       ...h.value,

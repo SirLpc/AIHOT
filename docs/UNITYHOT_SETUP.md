@@ -22,6 +22,22 @@ docker compose -p unityhot ps
 
 浏览 http://localhost:3000；/admin 使用生成的本地管理员密码。setup 服务应用原有迁移并导入信源，随后退出。未启动 worker，所以不会采集新闻、调用模型或出刊。空页面是预期，不应通过启用付费开关消除它。停止用 docker compose -p unityhot down；数据卷保留。
 
+### 首次预览的「运行」页
+
+业务迁移和 seed 不初始化 pg-boss。只启动上述 db/setup/api/web 时，`/admin/runs` 显示「队列尚未初始化」是正常状态；队列积压和 worker 定时任务统计显示不可用，不能解读为队列为空或任务正常。已有的任务时间线、信源健康、回执、投递及等待去重的文章仍可查看。依赖队列的重新处理和回执放行按钮暂时禁用。
+
+打开或刷新页面仅执行读取，不建队列表、不启动 worker，也不打开采集或模型开关。预览可以一直保持此状态。如果显示「队列初始化不完整」，表示 pg-boss schema 已存在但所需表缺失，应检查初始化/升级日志；不要删除数据库卷、手工伪造队列表或为消除提示启用外部调用。
+
+旧版本在首次预览时可能因缺少 `pgboss.job` / `pgboss.schedule` 让运行页返回 503。更新含此修复的 `unityhot` 分支后，仅需重建 API/Web；本次没有数据库迁移，无需初始化队列或清空数据。先确认当前分支和本地修改，再执行：
+
+```bash
+git switch unityhot
+git pull --ff-only origin unityhot
+docker compose -p unityhot up -d --build --no-deps api web
+```
+
+以上更新命令假定原预览数据库已运行。首次启动仍用前面的完整流程。若之后要启用 worker、排程、采集、模型或通知，应先分别确认其配置和授权。
+
 ### 已有 PostgreSQL 17（需 LZ4 / pg_trgm）
 
 ```bash

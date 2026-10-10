@@ -21,6 +21,8 @@ docker compose -p unityhot up -d --build db setup api web
 
 COLLECT_ENABLED、MODEL_CALLS_ENABLED、FEISHU_*_ENABLED、INDEXNOW_SUBMIT_ENABLED 默认关闭。不要为预览启动 worker。外部采集、模型预算、排程、通知及公开部署须另行确认；页面访问不触发模型调用。
 
+首次只启动 API/Web 时，后台「运行」页显示「队列尚未初始化」是预期状态，业务统计仍可查看。页面不会自动初始化队列或启动 worker；详见[首次预览说明](docs/UNITYHOT_SETUP.md#首次预览的运行页)。
+
 ## 产品边界
 
 - Unity 国际版与团结引擎分别用 engine:unity_global 和 engine:tuanjie 标注
