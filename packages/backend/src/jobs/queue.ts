@@ -197,6 +197,15 @@ export async function workModuleQueues(boss: PgBoss): Promise<void> {
 
 // Scheduled task bookkeeping: every run leaves a row, so operators see the latest result.
 
+/** A failed batch can still have useful per-item outcomes for its run history. */
+export class RunError extends Error {
+  readonly detail: object;
+  constructor(message: string, detail: object) {
+    super(message);
+    this.detail = detail;
+  }
+}
+
 export async function recordRun<T>(job: string, fn: () => Promise<T>): Promise<T> {
   const [row] = await sql<{ id: number }[]>`INSERT INTO job_runs (job) VALUES (${job}) RETURNING id`;
   try {
@@ -205,7 +214,8 @@ export async function recordRun<T>(job: string, fn: () => Promise<T>): Promise<T
     await sql`UPDATE job_runs SET status = 'ok', finished_at = now(), detail = ${sql.json(detail as never)} WHERE id = ${row!.id}`;
     return result;
   } catch (error) {
-    await sql`UPDATE job_runs SET status = 'failed', finished_at = now(), error = ${String(error).slice(0, 4000)} WHERE id = ${row!.id}`;
+    await sql`UPDATE job_runs SET status = 'failed', finished_at = now(), error = ${String(error).slice(0, 4000)},
+      detail = ${error instanceof RunError ? sql.json(error.detail as never) : null} WHERE id = ${row!.id}`;
     throw error;
   }
 }

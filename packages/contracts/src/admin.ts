@@ -254,13 +254,19 @@ export interface AdminDeliveryIssue {
   updated_at: Timestamp;
 }
 
+export interface ReportRunOutcome {
+  generated: string[];
+  skipped: Array<{ report: string; reason: "no_content" }>;
+  failed: string[];
+}
+
 export interface AdminRuns {
   checkedAt: Timestamp;
   /** Availability of the pg-boss tables used by this view; not a worker heartbeat. */
   queueStatus: "ready" | "uninitialized" | "incomplete";
   processes: Array<{ role: string; pid: number; host: string; release: string; startedAt: Timestamp; at: Timestamp; alive: boolean }>;
-  jobs: Array<{ job: string; started_at: Timestamp; finished_at: Timestamp | null; status: string; error: string | null; failed_24h: number; runs_24h: number }>;
-  timeline: Array<{ id: number; job: string; started_at: Timestamp; finished_at: Timestamp | null; status: string; error: string | null }>;
+  jobs: Array<{ job: string; started_at: Timestamp; finished_at: Timestamp | null; status: string; error: string | null; failed_24h: number; runs_24h: number; report_outcome?: ReportRunOutcome | null }>;
+  timeline: Array<{ id: number; job: string; started_at: Timestamp; finished_at: Timestamp | null; status: string; error: string | null; report_outcome?: ReportRunOutcome | null }>;
   queues: Array<{ name: string; state: string; n: number; oldest: Timestamp }>;
   failedJobs: Array<{ name: string; failed: number; last: Timestamp | null; last_output: string | null }>;
   grouping: {

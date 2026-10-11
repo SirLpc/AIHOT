@@ -21,6 +21,25 @@ const STATE_LABEL: Record<string, string> = { created: "排队", retry: "等待�
 
 const PARTS = await loadParts((m) => m.admin?.runs);
 
+function RunResult({ run }: { run: AdminRuns["timeline"][number] | AdminRuns["jobs"][number] }) {
+  const result = run.report_outcome;
+  const skipped = result?.skipped ?? [];
+  const onlySkipped = run.status === "ok" && skipped.length > 0 && !result?.generated.length;
+  return <div>
+    <Badge tone={run.status === "failed" ? "bad" : onlySkipped ? "muted" : run.status === "ok" ? "ok" : "muted"} title={run.error ?? undefined}>
+      {onlySkipped ? "skipped: no content" : run.status ?? "运行中"}
+    </Badge>
+    {result && <details className="mt-1 text-[11.5px] text-ink-3">
+      <summary className="cursor-pointer">生成 {result.generated.length} · 无内容跳过 {skipped.length} · 失败 {result.failed.length}</summary>
+      <div className="mt-1 max-w-[280px] break-words">
+        {result.generated.map((key) => <div key={key}>{key}：已生成</div>)}
+        {skipped.map(({ report }) => <div key={report}>{report}：无内容，后续有内容仍可重试</div>)}
+        {result.failed.map((key) => <div key={key} className="text-hot">{key}：失败</div>)}
+      </div>
+    </details>}
+  </div>;
+}
+
 export default function RunsAdmin({ loaderData }: Route.ComponentProps) {
   const refresh = useFetcher<typeof loader>();
   const r = refresh.data ?? loaderData;
@@ -106,7 +125,7 @@ export default function RunsAdmin({ loaderData }: Route.ComponentProps) {
             rowKey={(j) => j.job}
             columns={[
               { key: "j", label: "任务", render: (j) => <span className="font-mono text-[12.5px]">{j.job}</span> },
-              { key: "s", label: "上次", render: (j) => <Badge tone={j.status === "ok" ? "ok" : j.status === "failed" ? "bad" : "muted"} title={j.error ?? undefined}>{j.status ?? "运行中"}</Badge> },
+              { key: "s", label: "上次", render: (j) => <RunResult run={j} /> },
               { key: "at", label: "时间", render: (j) => <Time at={j.started_at} /> },
               { key: "d", label: "耗时", align: "right", render: (j) => duration(j.started_at, j.finished_at) },
               { key: "f", label: "24h 失败", align: "right", render: (j) => (j.failed_24h ? <span className="text-hot">{j.failed_24h}/{j.runs_24h}</span> : `0/${j.runs_24h}`) },
@@ -219,7 +238,7 @@ export default function RunsAdmin({ loaderData }: Route.ComponentProps) {
               columns={[
                 { key: "at", label: "开始", render: (t) => <span className="num whitespace-nowrap">{bj(t.started_at)}</span> },
                 { key: "j", label: "任务", render: (t) => <span className="font-mono text-[12px]">{t.job}</span> },
-                { key: "s", label: "结果", render: (t) => <Badge tone={t.status === "ok" ? "ok" : t.status === "failed" ? "bad" : "muted"} title={t.error ?? undefined}>{t.status ?? "运行中"}</Badge> },
+                { key: "s", label: "结果", render: (t) => <RunResult run={t} /> },
                 { key: "d", label: "耗时", align: "right", render: (t) => duration(t.started_at, t.finished_at) },
               ]}
             />

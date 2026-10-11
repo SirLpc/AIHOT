@@ -272,7 +272,7 @@ async function missedFacts(start: Date, end: Date): Promise<Array<{ key: string;
     .map(([key, members]) => ({ key, rows: members }));
 }
 
-/** The window's public reports the editors scored: none means judging did not run there, not a quiet day. */
+/** The window's scored public reports; compose distinguishes an empty window from unfinished upstream work. */
 async function judgedReports(start: Date, end: Date): Promise<number> {
   const [row] = await sql<{ n: number }[]>`
     SELECT count(*)::int AS n FROM publications p

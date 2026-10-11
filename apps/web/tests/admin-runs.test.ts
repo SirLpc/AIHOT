@@ -54,3 +54,22 @@ test("SSR ready queue retains empty-state wording and enabled recovery controls"
   assert.match(html, /<button(?![^>]*\sdisabled=)[^>]*>全部重新处理<\/button>/);
   assert.match(html, /<button(?![^>]*\sdisabled=)[^>]*>核对<\/button>/);
 });
+
+test("SSR distinguishes skipped report windows from generated issues and preserves mixed failures", async () => {
+  for (const status of ["ok", "failed"] as const) {
+    const outcome = { generated: [], skipped: [{ report: "monthly:2026-09", reason: "no_content" as const }],
+      failed: status === "failed" ? ["daily:2026-10-11"] : [] };
+    runs.jobs = [{ job: "reports.compose", started_at: at, finished_at: at, status, error: status === "failed" ? "real report failure" : null,
+      failed_24h: status === "failed" ? 1 : 0, runs_24h: 1, report_outcome: outcome }];
+    runs.timeline = [{ id: 1, ...runs.jobs[0]! }];
+    const html = (await (await fetch(`${web.origin}/admin/runs`)).text()).replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, "");
+    assert.match(html, /monthly:2026-09/);
+    assert.match(html, /无内容跳过/);
+    if (status === "ok") assert.match(html, /skipped: no content/);
+    else {
+      assert.match(html, />failed</);
+      assert.match(html, /daily:2026-10-11/);
+      assert.doesNotMatch(html, />skipped: no content</);
+    }
+  }
+});

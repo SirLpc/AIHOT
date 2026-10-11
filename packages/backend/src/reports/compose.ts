@@ -4,6 +4,7 @@
 // dailies and a model only writes its overview and introductions, from the brief in the industry pack
 // (industry/prompts/report-period*.md).
 import { z } from "zod";
+import type { ReportRunOutcome } from "@aihot/contracts/admin";
 import { EDITION_TIMES, REPORTS, SITE } from "@aihot/site";
 import { PLAIN_TERMS, RELEASE } from "@aihot/industry/taxonomy";
 import { promptText, promptVersion } from "../editorial/prompts.ts";
@@ -14,7 +15,7 @@ import { sql } from "../db.ts";
 import { logError } from "../lib/log-error.ts";
 import { chatJson } from "../providers/llm.ts";
 import { completeReceipt } from "../providers/receipts.ts";
-import { shutdownSignal } from "../jobs/queue.ts";
+import { RunError, shutdownSignal } from "../jobs/queue.ts";
 import { emit } from "../modules.ts";
 import { arrangeDaily, candidates, dailyEdition, periodEntries, sectionOf, SECTION_ORDER, type Candidate, type EditionEntry } from "./edition.ts";
 
@@ -36,6 +37,53 @@ export function dailyMetrics(main: EditionEntry[]) {
 }
 
 type ReportKind = "daily" | "weekly" | "monthly";
+type ComposeResult = { key: string; entries: number } & (
+  { status: "generated" | "existing"; reason?: never } | { status: "skipped"; reason: "no_content" }
+);
+
+/** No report row is saved for a skip, so a later arrival can make the period eligible again. */
+const noContent = (key: string): ComposeResult => ({ key, entries: 0, status: "skipped", reason: "no_content" });
+
+/** No entries alone cannot distinguish a quiet source from unfinished collection or analysis. */
+async function windowBlocker(start: Date, end: Date, checkCollection: boolean): Promise<string | null> {
+  const [pending] = await sql<{ n: number }[]>`
+    SELECT count(*)::int AS n FROM articles a JOIN sources s ON s.id = a.source_id
+    LEFT JOIN publications p ON p.article_id = a.id
+    WHERE NOT a.backfill AND a.timeline_at >= ${start} AND a.timeline_at < ${end}
+      AND s.participation_mode = 'editorial' AND s.tier <> 'EXCLUDE_MP'
+      AND (a.processing_state IN ('new', 'failed')
+        OR (p.selection_candidate AND p.eligible AND p.visibility = 'public' AND NOT p.selected AND a.grouping_status <> 'complete'))`;
+  if (pending!.n) return `upstream article work unfinished (${pending!.n})`;
+  if (!checkCollection) return null; // Judged, non-selected material can still support a quiet edition.
+  const sources = await sql<{ id: string; created_at: Date; config: { publishedAfter?: string }; health: string; fail_count: number; last_ok_at: Date | null; interval_minutes: number }[]>`
+    SELECT id, created_at, config, health, fail_count, last_ok_at, interval_minutes FROM sources
+    WHERE enabled AND participation_mode = 'editorial' AND tier <> 'EXCLUDE_MP' AND kind NOT IN ('external', 'mp_account') AND created_at < ${end}`;
+  for (const source of sources) {
+    const after = source.config.publishedAfter ? Date.parse(source.config.publishedAfter) : 0;
+    const activeFrom = Math.max(start.getTime(), source.created_at.getTime(), Number.isFinite(after) ? after : 0);
+    if (activeFrom >= end.getTime()) continue; // The half-open report window precedes collection start.
+    const freshFrom = Math.max(activeFrom, end.getTime() - source.interval_minutes * 60_000);
+    if (source.fail_count > 0 || source.health === "failing" || source.health === "degraded"
+      || !source.last_ok_at || source.last_ok_at.getTime() < freshFrom) {
+      return `upstream collection failed or unconfirmed (${source.id})`;
+    }
+  }
+  return null;
+}
+
+async function dailyInput(date: string) {
+  const end = beijingAt(date, EDITION_TIMES.daily);
+  const start = new Date(end.getTime() - 86400000);
+  const edition = await dailyEdition(date, start, end);
+  const empty = edition.entries.length === 0 && edition.stats.judgedReports === 0;
+  return { start, end, edition, empty, blocker: edition.entries.length === 0 ? await windowBlocker(start, end, empty) : null };
+}
+
+/** Missing-daily alerts use current evidence, not a stale skip from an earlier scheduled run. */
+export async function dailyReportExpected(date: string): Promise<boolean> {
+  const input = await dailyInput(date);
+  return !input.empty || input.blocker !== null;
+}
 
 /** How many events an issue already published carries; nothing when it does not exist yet. */
 async function savedReport(kind: ReportKind, key: string) {
@@ -86,14 +134,12 @@ function windowPoint(at: Date): string {
  * the editors judged with nothing new in it still has its issue: no entries, and a lead that says so
  * (REPORTS.quiet).
  */
-export async function composeDaily(date: string, reason?: string): Promise<{ key: string; entries: number }> {
+export async function composeDaily(date: string, reason?: string): Promise<ComposeResult> {
   const previous = await savedReport("daily", date);
-  if (previous && reason === undefined) return { key: date, entries: previous.entries };
-  const end = beijingAt(date, EDITION_TIMES.daily);
-  const start = new Date(end.getTime() - 86400000);
-  const edition = await dailyEdition(date, start, end);
-  // Nothing judged in the window is a failure upstream, not a quiet day: the run fails and is caught up later.
-  if (edition.entries.length === 0 && edition.stats.judgedReports === 0) throw new Error(`daily ${date}: nothing judged in its window`);
+  if (previous && reason === undefined) return { key: date, entries: previous.entries, status: "existing" };
+  const { start, end, edition, empty, blocker } = await dailyInput(date);
+  if (blocker) throw new Error(`daily ${date}: ${blocker}`);
+  if (empty) return noContent(date);
   const issue = arrangeDaily(edition.entries);
   const [lead, ...rest] = issue.main;
   const content = {
@@ -113,7 +159,7 @@ export async function composeDaily(date: string, reason?: string): Promise<{ key
     generator: { version: REPORT_VERSION, ...edition.stats, ...issue.stats },
   };
   await saveReport("daily", date, start, end, content, reason, null, []);
-  return { key: date, entries: issue.main.length };
+  return { key: date, entries: issue.main.length, status: "generated" };
 }
 
 /** A weekly's or monthly's size: the events it carries, chosen and ordered by rule. */
@@ -190,15 +236,23 @@ export function fitted(text: string, max: number): string | null {
  * anything the events do not name is not used, and overlong text keeps the leading sentences that fit.
  * Without a usable overview the issue is saved with none (see periodOverview).
  */
-async function composePeriod(kind: "weekly" | "monthly", key: string, startDate: string, endDateInclusive: string, reason: string | undefined) {
+async function composePeriod(kind: "weekly" | "monthly", key: string, startDate: string, endDateInclusive: string, reason: string | undefined): Promise<ComposeResult> {
   const previous = await savedReport(kind, key);
-  if (previous && reason === undefined) return { key, entries: previous.entries };
+  if (previous && reason === undefined) return { key, entries: previous.entries, status: "existing" };
   // The dailies' windows run from the edition time the day before the first to that time on the last.
   const start = beijingAt(addDays(startDate, -1), EDITION_TIMES.daily);
   const end = beijingAt(endDateInclusive, EDITION_TIMES.daily);
   const { entries, issues } = await periodEntries(startDate, endDateInclusive);
   const top = entries.slice(0, PERIOD_EVENTS[kind]);
-  if (!top.length) throw new Error(`${kind} ${key}: no daily entries in the period`);
+  if (!top.length) {
+    const have = new Set((await sql<{ key: string }[]>`SELECT key FROM reports WHERE kind = 'daily' AND key >= ${startDate} AND key <= ${endDateInclusive}`).map((r) => r.key));
+    for (let date = startDate; date <= endDateInclusive; date = addDays(date, 1)) {
+      if (have.has(date)) continue;
+      const input = await dailyInput(date);
+      if (input.blocker || !input.empty) throw new Error(`${kind} ${key}: daily ${date} missing${input.blocker ? `; ${input.blocker}` : ""}`);
+    }
+    return noContent(key);
+  }
   const selected = await candidates(start, end);
   const groups = SECTION_ORDER
     .map((label) => ({ label, items: top.filter((e) => sectionOf(e.category) === label) }))
@@ -242,7 +296,7 @@ async function composePeriod(kind: "weekly" | "monthly", key: string, startDate:
     generator: { version: REPORT_VERSION, model, written: overview !== null },
   };
   await saveReport(kind, key, start, end, content, reason, model, receiptId === null ? [] : [receiptId]);
-  return { key, entries: top.length };
+  return { key, entries: top.length, status: "generated" };
 }
 
 export async function composeWeekly(label: string, reason?: string) {
@@ -289,32 +343,47 @@ const nextMonth = (label: string) => {
 /**
  * The scheduled run (every half hour): every issue due by `now` that does not exist yet, oldest first.
  * The newest one appears at the first run after it falls due (above); a long stop or an older gap is
- * filled too. A kind with no issue yet only gets its latest due one. An issue that fails does not hold
- * up the others; at most `limit` issues are written per run, the next run continues.
+ * filled too. With no issue or live input yet, only the latest due period is checked. An empty period
+ * remains eligible; neither a skip nor a failure holds up others or uses the `limit` of written issues.
  */
-export async function composeDueReports(now = new Date(), limit = 8): Promise<{ generated: string[]; failed: string[] }> {
+export async function composeDueReports(now = new Date(), limit = 8): Promise<ReportRunOutcome> {
   const generated: string[] = [];
   const failed: string[] = [];
-  const kinds: Array<{ kind: ReportKind; due: string; next: (k: string) => string; compose: (k: string) => Promise<unknown> }> = [
+  const skipped: ReportRunOutcome["skipped"] = [];
+  const kinds: Array<{ kind: ReportKind; due: string; next: (k: string) => string; compose: (k: string) => Promise<ComposeResult> }> = [
     { kind: "daily", due: dueDaily(now), next: (k) => addDays(k, 1), compose: composeDaily },
     { kind: "weekly", due: dueWeekly(now), next: nextWeek, compose: composeWeekly },
     { kind: "monthly", due: dueMonthly(now), next: nextMonth, compose: composeMonthly },
   ];
   kinds: for (const k of kinds) {
     const have = new Set((await sql<{ key: string }[]>`SELECT key FROM reports WHERE kind = ${k.kind}`).map((r) => r.key));
-    const first = [...have].sort()[0] ?? k.due;
+    // A kind with no saved issue must still revisit an earlier skipped window if content arrives.
+    // Derive the lower bound from live input, not terminal skip rows or retention-limited run history.
+    let date: string | null;
+    if (k.kind === "daily") {
+      const [earliest] = await sql<{ at: Date | null }[]>`SELECT min(a.timeline_at) AS at FROM articles a JOIN sources s ON s.id = a.source_id
+        WHERE NOT a.backfill AND s.participation_mode = 'editorial' AND s.tier <> 'EXCLUDE_MP'`;
+      date = earliest?.at ? addDays(beijingDate(earliest.at), beijingTime(earliest.at) >= EDITION_TIMES.daily ? 1 : 0) : null;
+    } else {
+      const [earliest] = await sql<{ key: string | null }[]>`SELECT min(key) AS key FROM reports WHERE kind = 'daily' AND origin <> 'imported'`;
+      date = earliest?.key ?? null;
+    }
+    const inputKey = date ? k.kind === "daily" ? date : k.kind === "weekly" ? isoWeekLabel(date) : date.slice(0, 7) : k.due;
+    const first = [...have, k.due, inputKey].sort()[0]!;
     for (let key = first; key <= k.due; key = k.next(key)) {
       if (have.has(key)) continue;
       if (shutdownSignal.signal.aborted || generated.length >= limit) break kinds;
       try {
-        await k.compose(key);
-        generated.push(`${k.kind}:${key}`);
+        const result = await k.compose(key);
+        if (result.status === "skipped") skipped.push({ report: `${k.kind}:${key}`, reason: result.reason });
+        else if (result.status === "generated") generated.push(`${k.kind}:${key}`);
       } catch (error) {
         failed.push(`${k.kind}:${key}`);
         console.error(JSON.stringify({ level: "error", msg: "report failed", report: `${k.kind}:${key}`, error: logError(error) }));
       }
     }
   }
-  if (failed.length) throw new Error(`reports: ${failed.join(", ")} failed${generated.length ? `; ${generated.join(", ")} written` : ""}`);
-  return { generated, failed };
+  const result = { generated, skipped, failed };
+  if (failed.length) throw new RunError(`reports: ${failed.join(", ")} failed${generated.length ? `; ${generated.join(", ")} written` : ""}`, result);
+  return result;
 }

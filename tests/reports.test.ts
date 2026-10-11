@@ -1,5 +1,5 @@
 // Reports: a scheduled run that starts late still writes the issue it was due for, never one whose
-// window is still open; a daily whose window nothing was judged in is refused rather than published as a
+// window is still open; a daily whose window has no inputs is skipped rather than published as a
 // quiet day; and an older weekly that froze no summaries shows the cited articles' public summaries.
 import { editionAt, tag } from "./setup.ts";
 import assert from "node:assert/strict";
@@ -31,9 +31,9 @@ test("a late run writes the issue that was due, not today's", () => {
   assert.equal(dueMonthly(editionAt("monthly", "2027-01-15")), "2026-12");
 });
 
-test("a daily with nothing judged in its window is refused, not published as a quiet day", async () => {
+test("a daily with no inputs skips rather than publishing a quiet issue", async () => {
   const date = "2098-01-15";
-  await assert.rejects(composeDaily(date), /nothing judged/);
+  assert.deepEqual(await composeDaily(date), { key: date, entries: 0, status: "skipped", reason: "no_content" });
   const [row] = await sql`SELECT 1 FROM reports WHERE kind = 'daily' AND key = ${date}`;
   assert.equal(row, undefined);
 });

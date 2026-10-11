@@ -16,6 +16,7 @@ import { GROUPING_WARN_AFTER_MS, waitingSelectedNews } from "./grouping.ts";
 import { upstreamFindings } from "../media/upstream.ts";
 import { responder, serverModules } from "../modules.ts";
 import { sourceHealth, sourceHealthList } from "../sources/health.ts";
+import { dailyReportExpected } from "../reports/compose.ts";
 
 const REPEAT_MS: Record<Exclude<Level, "later">, number> = { now: 3600_000, today: 24 * 3600_000 };
 
@@ -101,7 +102,7 @@ export async function collectFindings(now = Date.now()): Promise<Finding[]> {
     // two hours later it is overdue.
     if (now >= beijingAt(beijingDate(now), EDITION_TIMES.daily).getTime() + 2 * 3600_000) {
       const [r] = await sql`SELECT 1 FROM reports WHERE kind = 'daily' AND key = ${beijingDate(now)}`;
-      if (!r) {
+      if (!r && await dailyReportExpected(beijingDate(now))) {
         out.push({
           key: "report.daily",
           level: "now",

@@ -39,7 +39,8 @@ export async function runsOverview(): Promise<Runs> {
     sql<{ key: string; value: Heartbeat; updated_at: Date }[]>`SELECT key, value, updated_at FROM settings WHERE key LIKE 'heartbeat.%' ORDER BY key`,
     sql<Runs["jobs"]>`
       WITH latest AS (
-        SELECT DISTINCT ON (job) job, started_at, finished_at, status, left(error, 400) AS error
+        SELECT DISTINCT ON (job) job, started_at, finished_at, status, left(error, 400) AS error,
+          CASE WHEN job = 'reports.compose' THEN detail END AS report_outcome
         FROM job_runs
         -- Registered worker schedules and the modules' current external jobs; the timeline retains history.
         WHERE ${queueReady ? sql`EXISTS (SELECT 1 FROM pgboss.schedule s WHERE s.name = 'cron.' || job_runs.job)` : sql`false`}
@@ -51,7 +52,8 @@ export async function runsOverview(): Promise<Runs> {
       )
       SELECT latest.*, coalesce(counts.failed_24h, 0) AS failed_24h, coalesce(counts.runs_24h, 0) AS runs_24h
       FROM latest LEFT JOIN counts USING (job) ORDER BY job`,
-    sql<Runs["timeline"]>`SELECT id, job, started_at, finished_at, status, left(error, 300) AS error FROM job_runs ORDER BY started_at DESC, id DESC LIMIT 80`,
+    sql<Runs["timeline"]>`SELECT id, job, started_at, finished_at, status, left(error, 300) AS error,
+      CASE WHEN job = 'reports.compose' THEN detail END AS report_outcome FROM job_runs ORDER BY started_at DESC, id DESC LIMIT 80`,
     queueReady ? sql<Runs["queues"]>`
       SELECT name, state, count(*)::int AS n, min(created_on) AS oldest FROM pgboss.job
       WHERE state IN ('created', 'retry', 'active') GROUP BY 1, 2 ORDER BY 1, 2` : [],
