@@ -15,6 +15,8 @@ import { resolveDelivery } from "@aihot/backend/notify/deliver";
 import { releaseReceipt } from "@aihot/backend/operations/recover";
 import { replaceContactQr, setTargetEnabled, settingsOverview, updateBudget } from "@aihot/backend/admin/settings";
 import { createSource, fetchNow, listSources, previewSource, previewStoredSource, sourceDetail, updateSource } from "@aihot/backend/admin/sources";
+import { exportSources, importSources, previewSourceImport } from "@aihot/backend/admin/source-transfer";
+import { SOURCE_DOCUMENT_MAX_BYTES } from "@aihot/backend/admin/source-definitions";
 import { sendProblem } from "../http/respond.ts";
 import { adminHandler } from "./admin-auth.ts";
 
@@ -41,6 +43,13 @@ export function registerAdmin(app: FastifyInstance) {
   }));
   app.post("/api/admin/sources", adminHandler(async (req, _reply, admin) => createSource(body(req), actorOf(admin))));
   app.post("/api/admin/sources/preview", adminHandler(async (req) => previewSource(body(req) as never)));
+  app.get("/api/admin/sources/export", adminHandler(async (req, reply) => {
+    const document = await exportSources(q(req).ids);
+    return reply.header("Content-Disposition", 'attachment; filename="source-definitions.json"').send(document);
+  }));
+  // Allow only a small wrapper beyond the bounded document itself.
+  app.post("/api/admin/sources/import/preview", { bodyLimit: SOURCE_DOCUMENT_MAX_BYTES + 1024 }, adminHandler(async (req) => previewSourceImport(body(req).document)));
+  app.post("/api/admin/sources/import", { bodyLimit: SOURCE_DOCUMENT_MAX_BYTES + 1024 }, adminHandler(async (req, _reply, admin) => importSources(body(req), actorOf(admin))));
   app.get("/api/admin/sources/:id", adminHandler(async (req, reply) => orNotFound(req, reply, await sourceDetail(param(req, "id")))));
   app.patch("/api/admin/sources/:id", adminHandler(async (req, reply, admin) => {
     const b = body<{ patch: unknown; version: string; reason?: string }>(req);

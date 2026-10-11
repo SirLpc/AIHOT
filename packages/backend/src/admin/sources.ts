@@ -8,7 +8,8 @@ import { groupingReset } from "../content/provenance.ts";
 import { sql, type Db } from "../db.ts";
 import { enqueue, QUEUES } from "../jobs/queue.ts";
 import { republishKey } from "../jobs/publication.ts";
-import { normalizeUrl } from "../lib/url.ts";
+import { sourceIdentity } from "../sources/identity.ts";
+export { sourceIdentity } from "../sources/identity.ts";
 import { serverModules } from "../modules.ts";
 import { fetchJsonList } from "../sources/json-list.ts";
 import { fetchRss } from "../sources/rss.ts";
@@ -182,22 +183,6 @@ const CreateSchema = z
     syndicate_fulltext: z.boolean().default(false),
   })
   .strict();
-
-/** The address a source collects from, used to find duplicates before creating one. */
-export function sourceIdentity(kind: string, config: Record<string, unknown>): string | null {
-  const raw = (config.feedUrl ?? config.url ?? config.listUrl ?? config.endpoint ?? null) as string | null;
-  if (kind === "x_search") {
-    const m = /from:([A-Za-z0-9_]{1,15})/.exec(String(config.query ?? ""));
-    return m ? `x:${m[1]!.toLowerCase()}` : null;
-  }
-  // A WeChat account is one account whichever id names it.
-  if (kind === "mp_account") {
-    const id = String(config.ghid ?? config.wxid ?? "").trim().toLowerCase();
-    return id ? `mp:${id}` : null;
-  }
-  if (!raw) return null;
-  return normalizeUrl(String(raw).replace(/^https:\/\/r\.jina\.ai\//, "")) ?? String(raw);
-}
 
 export async function findDuplicateSource(kind: string, config: Record<string, unknown>, exceptId?: string, db: Db = sql) {
   const identity = sourceIdentity(kind, config);

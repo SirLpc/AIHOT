@@ -2,6 +2,48 @@
 
 信源在后台“信源”页管理：新建、试抓一次看看抓到什么、改频率、启停、看失败原因和最近的条目。首次启动时，`industry/sources.json` 里的示范信源会被导入。
 
+## 导入与导出信源定义
+
+后台“信源 → 导入 / 导出”（`/admin/sources/transfer`）支持第 1 版 JSON 文件，适合在电脑之间迁移信源配置。可导出全部信源，或填写要导出的 ID；指定的 ID 有任何一个不存在时会报错，不会悄悄漏掉。每批最多 500 个信源、512 KiB；较多时按 ID 分批。
+
+导出保留名称、类型、频率、等级、参与方式、运营主体/信号组、标签、全文许可和可移植的采集配置，包括 Unity 国际版/团结引擎标签、`publisherRole`、`publisherUrlPrefixes`、`publishedAfter` 与解析规则。`first_party` 在导入时根据 `tier === "T1"` 计算。
+
+安全边界：
+
+- 不导出启停状态、采集游标、健康度、错误、历史文章、任务队列或服务端密钥；这不是数据库备份。
+- 配置使用字段白名单。所有 `headers`、`bodyJson`、非 GET 方法、不支持的字段/值、带用户名密码的 URL、私网/本机 URL 和不受支持的 URL 查询参数都会被省略。URL 查询只保留数字分页参数（`page`、`per_page`、`limit`、`pageSize`、`page_size`、`offset`）以及 `format`/`alt` 的 `json`、`rss`、`atom`、`xml` 值。不保留 URL 片段。不要将秘密放进名称、标签、选择器、查询文本或 URL 路径等普通配置字段。
+- 有省略项的定义带 `redacted_fields`，页面显示提示，导入预览会阻止应用。先检查并修复该定义，再主动移除标记后重试；不要直接批量删除标记。需要认证头或请求体的信源应在目标电脑单独配置，不能把凭据放进共享文件。当前示范 GitHub 源的两个普通请求头也会被省略，需要管理员确认后处理。
+
+导入步骤：
+
+1. 选取 JSON 文件或粘贴内容，点击验证预览。这里仅检查文件与数据库中的信源定义，不访问信源、不查 DNS、不采集文章、不调用付费服务。
+2. 查看每行的“新建 / 重复 / 冲突 / 无效”。已有相同 ID 或采集地址/账号会跳过；同 ID 不同配置也不会覆盖。文件内的重复按顺序保留首个有效新定义，并明确标出后续行。
+3. 有任何无效行时整批禁止应用，先修改后重新预览。没有无效行且有新信源时，点击“导入新信源”。实际导入在同一事务中重验；文件或相关信源状态改变时要求重新预览。失败时本批新增和审计记录一起回滚。
+4. 新信源全部为暂停状态，不安排抓取、不改变已有信源。去详情页核对来源许可、配置、付费服务与预算，再按需手动启用。抓取预览与自动采集是另一个明确操作，可能产生费用。
+
+最小示例（框架种子文件需要转换成下列带格式版本的结构，不能直接上传任意 JSON）：
+
+```json
+{
+  "format": "source-definitions",
+  "version": 1,
+  "sources": [{
+    "id": "example-unity-feed",
+    "name": "示例 Unity 技术源",
+    "kind": "rss",
+    "config": { "feedUrl": "https://example.com/feed.xml" },
+    "tags": ["engine:unity_global"],
+    "tier": "T2",
+    "participation_mode": "editorial",
+    "interval_minutes": 360,
+    "site_fulltext": false,
+    "syndicate_fulltext": false
+  }]
+}
+```
+
+管理 API：`GET /api/admin/sources/export`（可带 `?ids=id1,id2`）、`POST /api/admin/sources/import/preview`（`{document}`）、`POST /api/admin/sources/import`（`{document, previewHash}`）。全部要求管理员会话，两个 POST 还要求会话的 CSRF token；`previewHash` 来自同一份文件的最新预览，不可代替登录或 CSRF。
+
 ## 六种信源
 
 | 类型 | 适合 | 需要 |

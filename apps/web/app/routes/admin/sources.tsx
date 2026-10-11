@@ -24,7 +24,7 @@ export default function Sources({ loaderData }: Route.ComponentProps) {
     <AdminPage
       title="信源"
       subtitle="列表按健康度排序：失败的在最前。点进详情可以预览抓取、手动采集、调整频率与参与方式。"
-      actions={<ButtonLink to="/admin/sources/new" tone="primary">新建信源</ButtonLink>}
+      actions={<><ButtonLink to="/admin/sources/transfer">导入 / 导出</ButtonLink><ButtonLink to="/admin/sources/new" tone="primary">新建信源</ButtonLink></>}
     >
       <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-4">
         <Stat label="全部" value={num(totals.total)} />

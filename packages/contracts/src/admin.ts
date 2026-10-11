@@ -121,6 +121,43 @@ export interface AdminSourcePreview {
   items: Array<{ title: string; url: string; publishedAt: Timestamp | null; excerpt: string }>;
 }
 
+/** Portable definitions only: no credentials, collection state, articles or queue history. */
+export interface PortableSourceDefinition {
+  id: string;
+  name: string;
+  kind: "rss" | "web_list" | "json_list" | "x_search" | "mp_account" | "external";
+  config: Record<string, unknown>;
+  tags: string[];
+  owner_entity_id: string | null;
+  signal_group_id: string | null;
+  tier: "T1" | "T1_5" | "T2" | "EXCLUDE_MP";
+  participation_mode: "editorial" | "hot_signal" | "isolated";
+  interval_minutes: number;
+  site_fulltext: boolean;
+  syndicate_fulltext: boolean;
+  /** Omitted fields require manual repair before this definition can be imported. */
+  redacted_fields?: string[];
+}
+
+export interface SourceDefinitionsDocument {
+  format: "source-definitions";
+  version: 1;
+  exported_at?: string;
+  sources: PortableSourceDefinition[];
+}
+
+export interface AdminSourceImportPreview {
+  rows: Array<{ index: number; id: string; name: string; status: "new" | "duplicate" | "conflict" | "invalid"; messages: string[] }>;
+  counts: { new: number; duplicate: number; conflict: number; invalid: number };
+  canApply: boolean;
+  previewHash: string;
+}
+
+export interface AdminSourceImportResult {
+  created: string[];
+  skipped: number;
+}
+
 // Content and events
 
 export interface AdminContentRow {

@@ -27,7 +27,7 @@ export function useAdminAction() {
       method: "POST" | "PATCH" | "PUT" | "DELETE",
       path: string,
       body?: unknown,
-      opts: { success?: string; label?: string; revalidate?: boolean } = {},
+      opts: { success?: string; label?: string; revalidate?: boolean; signal?: AbortSignal } = {},
     ): Promise<T | null> => {
       const label = opts.label ?? `${method} ${path}`;
       // The same command retried after a failure keeps its key, so paid work is not repeated.
@@ -38,14 +38,17 @@ export function useAdminAction() {
         const res = await fetch(path, {
           method,
           credentials: "same-origin",
+          signal: opts.signal,
           headers: { "content-type": "application/json", "x-csrf-token": me.csrf, "idempotency-key": key },
           body: body === undefined ? undefined : JSON.stringify(body),
         });
+        if (opts.signal?.aborted) return null;
         if (res.status === 401) {
           window.location.href = `/api/auth/login?return=${encodeURIComponent(window.location.pathname + window.location.search)}`;
           return null;
         }
         const text = await res.text();
+        if (opts.signal?.aborted) return null;
         const json = text ? JSON.parse(text) : null;
         if (!res.ok) throw new AdminError(json?.detail ?? `请求失败（${res.status}）`);
         keys.current.delete(label);
@@ -54,6 +57,7 @@ export function useAdminAction() {
         // null means failure to callers; an empty success (204) is an empty object.
         return (json ?? {}) as T;
       } catch (error) {
+        if (opts.signal?.aborted) return null;
         toast(error instanceof AdminError ? error.message : "网络错误，请稍后再试", "error");
         return null;
       } finally {
