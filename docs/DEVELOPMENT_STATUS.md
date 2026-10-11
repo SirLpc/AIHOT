@@ -1,10 +1,24 @@
 # UnityHot 开发状态
 
-更新：2026-10-11。独立本地目录 UnityHot，当前分支 unityhot；适配起点/GitHub main 为 07d4c775e71a2f1ec3205a0082a21b423cb09b6e。首次适配发布为 d8ddfdbbf05891048e64db32506be0f06708a64b，运行页修复发布为 efefdc030428c0aeb8914e315bc989bec5a0c268。本次单篇试跑已完成本地验证，并获准发布到 unityhot；实际发布以该分支提交记录为准。未建 PR、未改远程仓库名、未部署。TestPg 未触碰。
+更新：2026-10-11。独立本地目录 UnityHot，当前分支 unityhot；适配起点/GitHub main 为 07d4c775e71a2f1ec3205a0082a21b423cb09b6e。首次适配发布为 d8ddfdbbf05891048e64db32506be0f06708a64b，运行页修复发布为 efefdc030428c0aeb8914e315bc989bec5a0c268。单篇试跑命令已发布为 78cd2d6936bf358da2dc9fe49a75534f50cfb405。未建 PR、未改远程仓库名、未部署。TestPg 未触碰。
+
+## 2026-10-11：Windows 本机验证与可复现设置手册
+
+完整 [Windows Docker 安装、试跑与迁机手册](UNITYHOT_SETUP.md) 现包含：新机空库安装与已有库更新的区别、固定 `-p unityhot`、本机端口绑定、管理员首次登录、default/llm 路由与滚动次数预算、Clash Verge fake-IP 排错、单篇导入/预检/付费执行/恢复、双源固定日期自动运行、正常停止，以及不清库的备份与新机空库恢复配方。README 已链接主流程。
+
+本机实际结果（用户终端与截图提供，区别于下方云端模拟测试）：
+
+- 首次真实单篇 `status=complete`，5 次请求，输入 20,016 tokens，输出 423 tokens；文章已分析、正文状态 ok、中文摘要已发布。历史稿未改为今天日期，内容诊断需先输入 ID/标题搜索。
+- DeepSeek 配置：`LLM_BASE_URL=https://api.deepseek.com`、`LLM_MODEL=deepseek-flash`、`LLM_EXTRA_JSON={"thinking":{"type":"disabled"}}`，实际 Key 只存本机。所有模型步骤走 `default`，预算服务为 `llm`，5/min、20/hour、20/rolling-day；回执没有货币金额，不能声称已证明 ¥1 上限。
+- 自动试运行仅启用 `unity-lts-releases` 与 `unity-supported-releases`，其他五源暂停；保留 feedUrl，按发布时间倒序，固定 `publishedAfter=2026-10-11T00:00:00.000Z`，不每日向前移动该起点。
+- 2026-10-11 04:35 UTC 的运行页截图显示 worker 心跳绿色，`sources.schedule` 0 失败 / 4 次执行，队列为空，回执 completed 5 / unknown 0。页面的定时任务区是已执行历史，刚启动时空白不等于没有注册。
+- **尚未确认**：两个源各自的自动抓取记录及新的自动文章发布。上述 5 条回执来自单篇验证；调度器成功不能替代源抓取/文章处理证据。DeepSeek 实际货币账单、完整 Playwright 视觉套件、跨电脑数据恢复也未验收。
+
+本次是文档改动：按仓库实际初始化、Compose、模型路由、预算、采集、单篇预检和排程代码逐项校核；没有启动云端应用/worker，没有触发真实采集或付费请求。文档检查包括相对链接/章节锚点、JSON 配置样例、命令中的项目名、密钥模式扫描及 `git diff --check`；另在临时目录运行 `init-env.ts` 验证密钥生成、默认开关关闭和拒绝覆盖，未输出秘密。迁机命令是可审阅的操作配方，不声称已在 Windows 上执行恢复演练。
 
 ## 2026-10-11：单篇本机试跑命令
 
-- 新增 `scripts/single-article.ts ARTICLE_ID`，默认只读预检；`--execute` 只在当前进程打开模型调用，`.env` 仍保持 MODEL_CALLS_ENABLED=false。完整 PowerShell/Docker 命令见 [设置说明](UNITYHOT_SETUP.md#只处理一篇文章的本机试跑)。
+- 新增 `scripts/single-article.ts ARTICLE_ID`，默认只读预检；`--execute` 只在当前进程打开模型调用，`.env` 仍保持 MODEL_CALLS_ENABLED=false。完整 PowerShell/Docker 命令见 [设置说明](UNITYHOT_SETUP.md#6-只处理一篇文章的本机试跑)。
 - 严格限制首次数据库只有一篇目标文章、全部信源暂停、普通网页 editorial 来源、无其他待办/活动任务、运行中采集、现存排程、无关事件或不确定回执。运行时停 API/Web/worker，保留 DB；之后只恢复 API/Web。
 - default/llm 路由固定 DeepSeek Flash、thinking disabled，拒绝具名模型覆盖及 Jina、SocialData、embedding/DashScope 等付费 Key；仍通过既有回执和滚动预算。整段首次试跑跨继续累计最多 20 次请求；5/min、20/hour、20/day 只是次数保护，cost 为空，不能保证 ¥1 硬费用上限。
 - 复用现有正文提取、分析/发布和归组；不注册常驻处理器、排程、综述、报告或翻译。用短事务锁定 pg-boss 任务表、核验精确目标后 fetch，再明确 complete/fail；只把该任务的 retryLimit 设为 0。目标通知/媒体任务取消，不消费别人的任务。
@@ -15,7 +29,7 @@
 
 独立审查发现并修复了 PostgreSQL 客户端默认生命周期提前释放锁、付费事务内再次占用小连接池导致死锁、四阶段结束误报停止、BLOCK 误报停止；另以失败测试复现并修复最后写作中断留下待执行归组任务。复审没有重要阻塞项。
 
-完整 Web 测试仍为 37 通过、14 因 Playwright 浏览器缺失失败，不能称整套或视觉通过。Docker 镜像实际构建、真实 DeepSeek 可用性/内容/账单未验证。没有启动预览 API/Web 或常驻业务 worker，没有新 smoke/MCP 或截图验收。测试仅用新建独立数据库、模拟模型响应和本地正文页；验证后干净停止测试数据库，依赖、构建和测试集群可逆隔离。既有停用运行时和用户数据库未动；测试阶段没有真实付费调用、外部通知、推送或部署。
+完整 Web 测试仍为 37 通过、14 因 Playwright 浏览器缺失失败，不能称整套或视觉通过。在该次云端代码验证中，Docker 镜像实际构建、真实 DeepSeek 可用性/内容/账单未验证；之后的本机真实验证见上方更新，账单仍未核对。没有启动预览 API/Web 或常驻业务 worker，没有新 smoke/MCP 或截图验收。测试仅用新建独立数据库、模拟模型响应和本地正文页；验证后干净停止测试数据库，依赖、构建和测试集群可逆隔离。既有停用运行时和用户数据库未动；测试阶段没有真实付费调用、外部通知、推送或部署。
 
 ## 2026-10-10：首次预览运行页
 
@@ -84,7 +98,7 @@ PostgreSQL 原先不可用；便携包缺少迁移所需 LZ4，未修改迁移�
 
 - 公开部署、域名与运营主体（远程 unityhot 分支发布已单次授权）
 - 条款、隐私、联系信息及适用合规要求
-- 模型服务、费用预算、采集/排程/通知开关
+- 本地 DeepSeek 单篇和双源自动试运行已经选择；公开运营的金额预算、扩大信源范围、通知和公开部署仍需另外决定
 - 用用户标注样本校准筛选。T1=60、T1_5=65、T2=76 与五轴权重保留，尚未完成 Unity 领域质量校准
 
 执行选择：使用用户要求的新独立 checkout 作为隔离边界，没有再创建嵌套 worktree；保留 @aihot/* 内部工作区包名，避免无意义导入重命名。它们不作为站点公开品牌。
