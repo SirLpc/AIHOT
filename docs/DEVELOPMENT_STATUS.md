@@ -1,6 +1,21 @@
 # UnityHot 开发状态
 
-更新：2026-10-10。独立本地目录 UnityHot，当前分支 unityhot；适配起点/GitHub main 为 07d4c775e71a2f1ec3205a0082a21b423cb09b6e。首次适配已发布为 d8ddfdbbf05891048e64db32506be0f06708a64b。本次运行页修复在本地验证，新增发布仍需单独授权；以 GitHub 实际引用为准。未建 PR、未改远程仓库名、未部署。TestPg 未触碰。
+更新：2026-10-11。独立本地目录 UnityHot，当前分支 unityhot；适配起点/GitHub main 为 07d4c775e71a2f1ec3205a0082a21b423cb09b6e。首次适配发布为 d8ddfdbbf05891048e64db32506be0f06708a64b，运行页修复发布为 efefdc030428c0aeb8914e315bc989bec5a0c268。本次单篇试跑已完成本地验证，并获准发布到 unityhot；实际发布以该分支提交记录为准。未建 PR、未改远程仓库名、未部署。TestPg 未触碰。
+
+## 2026-10-11：单篇本机试跑命令
+
+- 新增 `scripts/single-article.ts ARTICLE_ID`，默认只读预检；`--execute` 只在当前进程打开模型调用，`.env` 仍保持 MODEL_CALLS_ENABLED=false。完整 PowerShell/Docker 命令见 [设置说明](UNITYHOT_SETUP.md#只处理一篇文章的本机试跑)。
+- 严格限制首次数据库只有一篇目标文章、全部信源暂停、普通网页 editorial 来源、无其他待办/活动任务、运行中采集、现存排程、无关事件或不确定回执。运行时停 API/Web/worker，保留 DB；之后只恢复 API/Web。
+- default/llm 路由固定 DeepSeek Flash、thinking disabled，拒绝具名模型覆盖及 Jina、SocialData、embedding/DashScope 等付费 Key；仍通过既有回执和滚动预算。整段首次试跑跨继续累计最多 20 次请求；5/min、20/hour、20/day 只是次数保护，cost 为空，不能保证 ¥1 硬费用上限。
+- 复用现有正文提取、分析/发布和归组；不注册常驻处理器、排程、综述、报告或翻译。用短事务锁定 pg-boss 任务表、核验精确目标后 fetch，再明确 complete/fail；只把该任务的 retryLimit 设为 0。目标通知/媒体任务取消，不消费别人的任务。
+- 普通队列进程共享、试跑独占一个进程生命周期锁；pg-boss 试跑模式关闭 schedule/supervise/migrate。没有新业务迁移。旧进程不认识新锁，更新前必须实际停止，不能只看心跳。
+- 10 分钟后不再开启新调用，等待在途请求与回执结算；SIGINT/SIGTERM 同样等待。停止时取消尚未执行的目标后续任务，保存文章、回执和 trial.article 运行记录；手动审计后才用 --resume 重建所需步骤。pending/unknown 回执或活动任务不会自动释放或重试。旧稿日期和历史身份保持不变。
+
+最终验证：`npm test` 718/718，`npm run test:standalone` 180/180，`npm run typecheck`、Web 生产构建、`git diff --check` 通过。单篇真实数据库回归在 DATABASE_POOL_MAX=1 下 14/14 通过，覆盖精确任务、其他文章任务保护、租约互斥、提取成功/失败、unknown/拒绝及手动继续、20 次累计限制、四阶段分析→提取→分析→归组、正常 BLOCK 和最终写作期间中断。CLI 参数/无外部访问检查等独立回归 4/4。
+
+独立审查发现并修复了 PostgreSQL 客户端默认生命周期提前释放锁、付费事务内再次占用小连接池导致死锁、四阶段结束误报停止、BLOCK 误报停止；另以失败测试复现并修复最后写作中断留下待执行归组任务。复审没有重要阻塞项。
+
+完整 Web 测试仍为 37 通过、14 因 Playwright 浏览器缺失失败，不能称整套或视觉通过。Docker 镜像实际构建、真实 DeepSeek 可用性/内容/账单未验证。没有启动预览 API/Web 或常驻业务 worker，没有新 smoke/MCP 或截图验收。测试仅用新建独立数据库、模拟模型响应和本地正文页；验证后干净停止测试数据库，依赖、构建和测试集群可逆隔离。既有停用运行时和用户数据库未动；测试阶段没有真实付费调用、外部通知、推送或部署。
 
 ## 2026-10-10：首次预览运行页
 

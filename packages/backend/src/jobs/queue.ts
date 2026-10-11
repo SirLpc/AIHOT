@@ -6,12 +6,15 @@ import { PgBoss, type SendOptions, type WorkOptions } from "pg-boss";
 import { config } from "../config.ts";
 import { sql, type Db } from "../db.ts";
 import { shutdownSignal } from "../lib/shutdown.ts";
+import { acquireQueueLease } from "./queue-lease.ts";
 import { logError } from "../lib/log-error.ts";
 import { serverModules, type ModuleQueue } from "../modules.ts";
 export { shutdownSignal } from "../lib/shutdown.ts";
 
 let boss: PgBoss | null = null;
 let starting: Promise<PgBoss> | null = null;
+let releaseLease: (() => Promise<void>) | null = null;
+let bossMode: "normal" | "single-article" | null = null;
 
 export interface JobData {
   "content.analyze": { articleId: string; attemptTag?: string };
@@ -58,17 +61,28 @@ const QUEUE_OPTIONS: Record<QueueName, QueueOptions> = {
 
 const ensured = new Set<string>();
 
-export async function getBoss(): Promise<PgBoss> {
+export async function getBoss(mode?: "single-article"): Promise<PgBoss> {
+  if (mode && bossMode && bossMode !== mode) throw new Error("Normal queue process already started");
   if (boss) return boss;
   starting ??= (async () => {
-    const b = new PgBoss({ connectionString: config.databaseUrl, max: 4, schema: "pgboss", application_name: "aihot-jobs" });
+    bossMode = mode ?? "normal";
+    // The one-shot caller owns its exclusive lease; normal users (including API enqueue)
+    // share a lease before pg-boss can start any scheduler/supervisor.
+    const b = new PgBoss({ connectionString: config.databaseUrl, max: 4, schema: "pgboss",
+      application_name: mode ? "unityhot-single-article" : "aihot-jobs",
+      ...(mode ? { schedule: false, supervise: false, migrate: false } : {}),
+    });
     b.on("error", (err) => console.error("[pg-boss]", logError(err)));
     try {
+      if (!mode) releaseLease = await acquireQueueLease("normal");
       await b.start();
       boss = b;
       return b;
     } catch (error) {
       await b.stop({ graceful: false }).catch((cleanup) => console.error("[pg-boss] startup cleanup", logError(cleanup)));
+      await releaseLease?.();
+      releaseLease = null;
+      bossMode = null;
       throw error;
     } finally {
       // A temporary connection error must not leave every caller sharing a rejected promise.
@@ -114,6 +128,9 @@ export async function stopBoss(): Promise<void> {
   }
   boss = null;
   starting = null;
+  bossMode = null;
+  await releaseLease?.();
+  releaseLease = null;
 }
 
 export async function ensureQueue(name: string, options: QueueOptions = QUEUE_OPTIONS[name as QueueName] ?? {}): Promise<void> {

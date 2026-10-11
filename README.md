@@ -23,6 +23,12 @@ COLLECT_ENABLED、MODEL_CALLS_ENABLED、FEISHU_*_ENABLED、INDEXNOW_SUBMIT_ENABL
 
 首次只启动 API/Web 时，后台「运行」页显示「队列尚未初始化」是预期状态，业务统计仍可查看。页面不会自动初始化队列或启动 worker；详见[首次预览说明](docs/UNITYHOT_SETUP.md#首次预览的运行页)。
 
+## 单篇本机试跑
+
+已导入一篇文章、暂停全部信源后，可用 `node scripts/single-article.ts ARTICLE_ID` 做只读预检；明确加 `--execute` 才运行这一篇，模型开关只在该进程内打开。先停止 API/Web/worker，数据库保持运行。需要继续时先审计进度再加 `--resume`，没有自动重试。
+
+仅支持 default 路由的 DeepSeek Flash、关闭 thinking、无付费提取/向量兜底。次数预算不保证 ¥1 费用上限；真实服务与费用仍待本机验证。完整 PowerShell/Docker 命令、重建及恢复步骤见[单篇试跑说明](docs/UNITYHOT_SETUP.md#只处理一篇文章的本机试跑)。
+
 ## 产品边界
 
 - Unity 国际版与团结引擎分别用 engine:unity_global 和 engine:tuanjie 标注

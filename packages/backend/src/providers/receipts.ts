@@ -6,6 +6,7 @@
 // 4. A request whose outcome is unknown (timeout after sending, crash mid-flight) is not re-sent by the
 //    caller. ops.recover releases it once after 30 minutes (operations/recover.ts), so a lost answer
 //    costs at most one repeat; after that it waits for the admin.
+import { AsyncLocalStorage } from "node:async_hooks";
 import { sql, type Db } from "../db.ts";
 import { sha256, stableJson } from "../lib/ids.ts";
 import { shutdownSignal } from "../lib/shutdown.ts";
@@ -79,6 +80,12 @@ export interface ReceiptResult {
   reused: boolean;
 }
 
+// A bounded one-shot may further restrict NEW requests without bypassing normal receipts/budgets.
+const requestGuard = new AsyncLocalStorage<(request: ReceiptRequest, db: Db) => Promise<void>>();
+export function withPaidRequestGuard<T>(guard: (request: ReceiptRequest, db: Db) => Promise<void>, run: () => Promise<T>): Promise<T> {
+  return requestGuard.run(guard, run);
+}
+
 const PENDING_STALE_MS = 10 * 60 * 1000;
 
 export function logicalKeyFor(req: ReceiptRequest): string {
@@ -139,12 +146,14 @@ export async function paidRequest(req: ReceiptRequest, call: () => Promise<CallO
       }
       if (existing.status === "unknown") return { kind: "unknown" as const, row: existing };
       // failed: the provider did not take the request, or its answer was unusable; a new attempt is allowed.
+      await requestGuard.getStore()?.(req, tx);
       await checkBudget(tx, req.service);
       const [r] = await tx<{ attempts: number }[]>`
         UPDATE receipts SET status = 'pending', attempts = attempts + 1, error = NULL, updated_at = now() WHERE id = ${existing.id} RETURNING attempts`;
       const attemptId = await startAttempt(tx, existing.id, r!.attempts, req);
       return { kind: "call" as const, id: existing.id, attemptId };
     }
+    await requestGuard.getStore()?.(req, tx);
     await checkBudget(tx, req.service);
     const [row] = await tx<{ id: number }[]>`
       INSERT INTO receipts (logical_key, service, model, purpose, subject, status, request, attempts)
